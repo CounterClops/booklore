@@ -240,6 +240,9 @@ public class CbxConversionService {
             rgbImage.getGraphics().dispose();
         }
         
+        // Use ByteArrayOutputStream to avoid issues with ImageOutputStream over ZipArchiveOutputStream
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        
         // Get JPEG writer
         ImageWriter writer = ImageIO.getImageWritersByFormatName("jpg").next();
         ImageWriteParam param = writer.getDefaultWriteParam();
@@ -249,13 +252,16 @@ public class CbxConversionService {
             param.setCompressionQuality(quality);
         }
         
-        // Write the image
-        try (ImageOutputStream ios = ImageIO.createImageOutputStream(zipOut)) {
+        // Write the image to ByteArrayOutputStream first
+        try (ImageOutputStream ios = ImageIO.createImageOutputStream(baos)) {
             writer.setOutput(ios);
-            writer.write(null, new javax.imageio.IIOImage(rgbImage, null, null), param);
+            writer.write(null, new IIOImage(rgbImage, null, null), param);
         } finally {
             writer.dispose();
         }
+        
+        // Then write the bytes to the ZIP stream
+        zipOut.write(baos.toByteArray());
     }
 
     private String generatePageHtml(String imageFileName, int pageNumber) throws IOException, TemplateException {

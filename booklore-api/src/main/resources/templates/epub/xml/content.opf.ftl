@@ -10,14 +10,14 @@
   </metadata>
 
   <manifest>
-    <item id="cover" href="${coverImagePath}" media-type="image/png" properties="cover-image" />
+    <item id="cover" href="${coverImagePath}" media-type="image/jpeg" properties="cover-image" />
     <item id="ncx" href="${tocNcxPath}" media-type="application/x-dtbncx+xml" />
     <item id="nav" href="${navXhtmlPath}" properties="nav" media-type="application/xhtml+xml" />
 
     <#-- Loop over the content file groups and emit the two items per entry -->
     <#list contentFileGroups as file>
       <item id="${'page_' + file.contentKey}" href="${file.htmlPath}" media-type="application/xhtml+xml" />
-      <item id="${'img_' + file.contentKey}" href="${file.imagePath}" media-type="image/png" />
+      <item id="${'img_' + file.contentKey}" href="${file.imagePath}" media-type="image/jpeg" />
     </#list>
 
     <item id="css" href="${stylesheetCssPath}" media-type="text/css" />
