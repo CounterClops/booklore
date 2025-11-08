@@ -1,7 +1,8 @@
-/* EPUB 3.0 compliant stylesheet for comic books */
+/* EPUB 3.0 compliant stylesheet for comic books - optimized for e-ink readers */
 @page {
     margin: 0;
     padding: 0;
+    background-color: #ffffff
 }
 
 html, body {
@@ -10,13 +11,14 @@ html, body {
     margin: 0;
     padding: 0;
     overflow: hidden;
+    background-color: #ffffff;
 }
 
 body {
     display: flex;
     align-items: center;
     justify-content: center;
-    background-color: #000;
+    background-color: #ffffff;
 }
 
 div {
@@ -25,6 +27,7 @@ div {
     display: flex;
     align-items: center;
     justify-content: center;
+    background-color: #ffffff;
 }
 
 img {
