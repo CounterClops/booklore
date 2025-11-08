@@ -44,16 +44,20 @@
     <#-- Identifiers -->
     <dc:identifier id="BookID">${identifier!""}</dc:identifier>
     <#if isbn13?has_content>
-    <dc:identifier opf:scheme="ISBN">${isbn13}</dc:identifier>
+    <dc:identifier id="isbn13">${isbn13}</dc:identifier>
+    <meta refines="#isbn13" property="identifier-type" scheme="onix:codelist5">15</meta>
     </#if>
     <#if isbn10?has_content>
-    <dc:identifier opf:scheme="ISBN">${isbn10}</dc:identifier>
+    <dc:identifier id="isbn10">${isbn10}</dc:identifier>
+    <meta refines="#isbn10" property="identifier-type" scheme="onix:codelist5">02</meta>
     </#if>
     <#if asin?has_content>
-    <dc:identifier opf:scheme="ASIN">${asin}</dc:identifier>
+    <dc:identifier id="asin">${asin}</dc:identifier>
+    <meta refines="#asin" property="identifier-type">ASIN</meta>
     </#if>
     <#if goodreadsId?has_content>
-    <dc:identifier opf:scheme="GOODREADS">${goodreadsId}</dc:identifier>
+    <dc:identifier id="goodreads">${goodreadsId}</dc:identifier>
+    <meta refines="#goodreads" property="identifier-type">GOODREADS</meta>
     </#if>
     
     <#-- Categories/Subjects -->
@@ -74,8 +78,14 @@
     <meta property="schema:numberOfPages">${pageCount}</meta>
     </#if>
     
+    <#-- EPUB 3.0 required metadata -->
     <meta property="dcterms:modified">${modified!""}</meta>
     <meta name="cover" content="cover" />
+    
+    <#-- Comic-specific metadata -->
+    <meta property="rendition:layout">pre-paginated</meta>
+    <meta property="rendition:orientation">auto</meta>
+    <meta property="rendition:spread">landscape</meta>
   </metadata>
 
   <manifest>
@@ -94,7 +104,7 @@
 
   <spine page-progression-direction="ltr" toc="ncx">
     <#list contentFileGroups as file>
-      <itemref idref="page_${file.contentKey}" />
+      <itemref idref="page_${file.contentKey}" properties="page-spread-center" />
     </#list>
   </spine>
 </package>
