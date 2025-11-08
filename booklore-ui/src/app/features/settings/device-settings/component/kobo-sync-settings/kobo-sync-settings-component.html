@@ -163,7 +163,7 @@
             <div class="setting-item">
               <div class="setting-info">
                 <div class="setting-label-row">
-                  <label class="setting-label">Convert CBZ/CBR to EPUB</label>
+                  <label class="setting-label">Convert CBX to EPUB</label>
                   <p-toggle-switch
                     id="convertCbxToEpub"
                     [(ngModel)]="koboSettings.convertCbxToEpub"
@@ -171,9 +171,7 @@
                   </p-toggle-switch>
                 </div>
                 <p class="setting-description">
-                  <strong>Pros:</strong> Converts comic book archives (CBZ/CBR) to EPUB format for better Kobo compatibility and reading experience.
-                  <br>
-                  <strong>Cons:</strong> Conversion requires additional processing time and storage space. Comics over the size limit below will sync in original format.
+                  Converts CBX files to EPUB format for better Kobo compatibility and reading experience.
                 </p>
               </div>
             </div>
@@ -196,7 +194,7 @@
                 <p class="setting-description">
                   Comic book archives can be very large due to high-resolution images. Set a reasonable limit to prevent server overload during conversion.
                   <br>
-                  <strong>Recommended:</strong> 100-200MB for most comic libraries. Very large comics will sync in original CBZ/CBR format if they exceed this limit.
+                  <strong>Recommended:</strong> 100-200MB for most comic libraries. CBX files over this limit will not be converted, or synced to the device.
                 </p>
               </div>
             </div>
