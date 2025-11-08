@@ -13,6 +13,10 @@ import org.apache.commons.compress.archivers.zip.ZipFile;
 import org.springframework.stereotype.Service;
 
 import javax.imageio.ImageIO;
+import javax.imageio.ImageWriteParam;
+import javax.imageio.ImageWriter;
+import javax.imageio.IIOImage;
+import javax.imageio.stream.ImageOutputStream;
 import java.awt.image.BufferedImage;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
@@ -32,7 +36,7 @@ public class CbxConversionService {
     private static final String NAV_XHTML_PATH = "OEBPS/nav.xhtml";
     private static final String TOC_NCX_PATH = "OEBPS/toc.ncx";
     private static final String STYLESHEET_CSS_PATH = "OEBPS/Styles/stylesheet.css";
-    private static final String COVER_IMAGE_PATH = "OEBPS/Images/cover.png";
+    private static final String COVER_IMAGE_PATH = "OEBPS/Images/cover.jpg";
     private static final String MIMETYPE_CONTENT = "application/epub+zip";
     
     private final Configuration freemarkerConfig;
@@ -193,7 +197,7 @@ public class CbxConversionService {
         for (int i = 0; i < images.size(); i++) {
             BufferedImage image = images.get(i);
             String contentKey = String.format("page-%04d", i + 1);
-            String imageFileName = contentKey + ".png";
+            String imageFileName = contentKey + ".jpg";
             String htmlFileName = contentKey + ".xhtml";
 
             String imagePath = IMAGE_ROOT_PATH + imageFileName;
@@ -219,8 +223,39 @@ public class CbxConversionService {
             throws IOException {
         ZipArchiveEntry imageEntry = new ZipArchiveEntry(imagePath);
         zipOut.putArchiveEntry(imageEntry);
-        ImageIO.write(image, "png", zipOut);
+        
+        // Write JPEG with compression for smaller file size
+        writeJpegImage(image, zipOut, 0.85f);
+        
         zipOut.closeArchiveEntry();
+    }
+    
+    private void writeJpegImage(BufferedImage image, ZipArchiveOutputStream zipOut, float quality) 
+            throws IOException {
+        // Convert to RGB if necessary (JPEG doesn't support transparency)
+        BufferedImage rgbImage = image;
+        if (image.getType() != BufferedImage.TYPE_INT_RGB) {
+            rgbImage = new BufferedImage(image.getWidth(), image.getHeight(), BufferedImage.TYPE_INT_RGB);
+            rgbImage.getGraphics().drawImage(image, 0, 0, null);
+            rgbImage.getGraphics().dispose();
+        }
+        
+        // Get JPEG writer
+        ImageWriter writer = ImageIO.getImageWritersByFormatName("jpg").next();
+        ImageWriteParam param = writer.getDefaultWriteParam();
+        
+        if (param.canWriteCompressed()) {
+            param.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
+            param.setCompressionQuality(quality);
+        }
+        
+        // Write the image
+        try (ImageOutputStream ios = ImageIO.createImageOutputStream(zipOut)) {
+            writer.setOutput(ios);
+            writer.write(null, new javax.imageio.IIOImage(rgbImage, null, null), param);
+        } finally {
+            writer.dispose();
+        }
     }
 
     private String generatePageHtml(String imageFileName, int pageNumber) throws IOException, TemplateException {
@@ -236,11 +271,21 @@ public class CbxConversionService {
                               List<EpubContentFileGroup> contentGroups) throws IOException, TemplateException {
         
         Map<String, Object> model = createBookMetadataModel(bookEntity);
-        model.put("contentFileGroups", contentGroups);
-        model.put("coverImagePath", COVER_IMAGE_PATH);
-        model.put("tocNcxPath", TOC_NCX_PATH);
-        model.put("navXhtmlPath", NAV_XHTML_PATH);
-        model.put("stylesheetCssPath", STYLESHEET_CSS_PATH);
+        
+        // Convert full paths to relative paths for content.opf (which is inside OEBPS/)
+        List<EpubContentFileGroup> relativeContentGroups = contentGroups.stream()
+                .map(group -> new EpubContentFileGroup(
+                        group.contentKey(),
+                        makeRelativeToOebps(group.imagePath()),
+                        makeRelativeToOebps(group.htmlPath())
+                ))
+                .toList();
+        
+        model.put("contentFileGroups", relativeContentGroups);
+        model.put("coverImagePath", makeRelativeToOebps(COVER_IMAGE_PATH));
+        model.put("tocNcxPath", makeRelativeToOebps(TOC_NCX_PATH));
+        model.put("navXhtmlPath", makeRelativeToOebps(NAV_XHTML_PATH));
+        model.put("stylesheetCssPath", makeRelativeToOebps(STYLESHEET_CSS_PATH));
         model.put("firstPageId", contentGroups.isEmpty() ? "" : "page_" + contentGroups.get(0).contentKey());
         
         String contentOpf = processTemplate("xml/content.opf.ftl", model);
@@ -319,6 +364,18 @@ public class CbxConversionService {
             }
             return new String(inputStream.readAllBytes(), StandardCharsets.UTF_8);
         }
+    }
+
+    private String makeRelativeToOebps(String fullPath) {
+        Path oebpsPath = Paths.get("OEBPS");
+        Path targetPath = Paths.get(fullPath);
+        
+        // If the path starts with OEBPS, make it relative to OEBPS directory
+        if (targetPath.startsWith(oebpsPath)) {
+            return oebpsPath.relativize(targetPath).toString();
+        }
+        
+        return fullPath;
     }
 
     private long calculateCrc32(byte[] data) {
