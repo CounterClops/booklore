@@ -10,6 +10,7 @@ import com.adityachandel.booklore.model.enums.BookFileType;
 import com.adityachandel.booklore.model.enums.KoboBookFormat;
 import com.adityachandel.booklore.model.enums.KoboReadStatus;
 import com.adityachandel.booklore.service.appsettings.AppSettingService;
+import com.adityachandel.booklore.service.kobo.KoboCompatibilityService;
 import com.adityachandel.booklore.util.kobo.KoboUrlBuilder;
 import lombok.AllArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -29,12 +30,13 @@ public class KoboEntitlementService {
     private final KoboUrlBuilder koboUrlBuilder;
     private final BookQueryService bookQueryService;
     private final AppSettingService appSettingService;
+    private final KoboCompatibilityService koboCompatibilityService;
 
     public List<NewEntitlement> generateNewEntitlements(Set<Long> bookIds, String token, boolean removed) {
         List<BookEntity> books = bookQueryService.findAllWithMetadataByIds(bookIds);
 
         return books.stream()
-                .filter(bookEntity -> bookEntity.getBookType() == BookFileType.EPUB)
+                .filter(koboCompatibilityService::isBookSupportedForKobo)
                 .map(book -> NewEntitlement.builder()
                         .newEntitlement(BookEntitlementContainer.builder()
                                 .bookEntitlement(buildBookEntitlement(book, removed))
@@ -48,7 +50,7 @@ public class KoboEntitlementService {
     public List<ChangedEntitlement> generateChangedEntitlements(Set<Long> bookIds, String token, boolean removed) {
         List<BookEntity> books = bookQueryService.findAllWithMetadataByIds(bookIds);
         return books.stream()
-                .filter(bookEntity -> bookEntity.getBookType() == BookFileType.EPUB)
+                .filter(koboCompatibilityService::isBookSupportedForKobo)
                 .map(book -> {
                     KoboBookMetadata metadata;
                     if (removed) {
@@ -194,4 +196,5 @@ public class KoboEntitlementService {
     private OffsetDateTime getCreatedOn(BookEntity book) {
         return book.getAddedOn() != null ? book.getAddedOn().atOffset(ZoneOffset.UTC) : getCurrentUtc();
     }
+
 }
