@@ -460,7 +460,7 @@ public class CbxConversionService {
                 model.put("publisher", metadata.getPublisher());
             }
             if (metadata.getPublishedDate() != null) {
-                model.put("publishedDate", metadata.getPublishedDate());
+                model.put("publishedDate", metadata.getPublishedDate().toString());
             }
             if (metadata.getPageCount() != null && metadata.getPageCount() > 0) {
                 model.put("pageCount", metadata.getPageCount());

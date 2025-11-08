@@ -25,7 +25,7 @@
     </#if>
     
     <#if publishedDate?has_content>
-    <dc:date>${publishedDate?string("yyyy-MM-dd")}</dc:date>
+    <dc:date>${publishedDate}</dc:date>
     </#if>
     
     <#if description?has_content>
