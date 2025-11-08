@@ -119,7 +119,7 @@ public class KoboEntitlementService {
     public KoboBookMetadata getMetadataForBook(long bookId, String token) {
         List<BookEntity> books = bookQueryService.findAllWithMetadataByIds(Set.of(bookId))
                 .stream()
-                .filter(bookEntity -> bookEntity.getBookType() == BookFileType.EPUB)
+                .filter(koboCompatibilityService::isBookSupportedForKobo)
                 .toList();
         return mapToKoboMetadata(books.getFirst(), token);
     }
@@ -154,8 +154,16 @@ public class KoboEntitlementService {
 
         KoboBookFormat bookFormat = KoboBookFormat.EPUB3;
         KoboSettings koboSettings = appSettingService.getAppSettings().getKoboSettings();
-        if (koboSettings != null && koboSettings.isConvertToKepub()) {
-            bookFormat = KoboBookFormat.KEPUB;
+        
+        boolean isEpubFile = book.getBookType() == BookFileType.EPUB;
+        boolean isCbxFile = book.getBookType() == BookFileType.CBX;
+        
+        if (koboSettings != null) {
+            if (isEpubFile && koboSettings.isConvertToKepub()) {
+                bookFormat = KoboBookFormat.KEPUB;
+            } else if (isCbxFile && koboSettings.isConvertCbxToEpub()) {
+                bookFormat = koboSettings.isConvertToKepub() ? KoboBookFormat.KEPUB : KoboBookFormat.EPUB3;
+            }
         }
 
         return KoboBookMetadata.builder()
