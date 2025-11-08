@@ -10,6 +10,11 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.compress.archivers.zip.ZipArchiveEntry;
 import org.apache.commons.compress.archivers.zip.ZipArchiveOutputStream;
 import org.apache.commons.compress.archivers.zip.ZipFile;
+import org.apache.commons.compress.archivers.sevenz.SevenZArchiveEntry;
+import org.apache.commons.compress.archivers.sevenz.SevenZFile;
+import com.github.junrar.Archive;
+import com.github.junrar.rarfile.FileHeader;
+import com.github.junrar.exception.RarException;
 import org.springframework.stereotype.Service;
 
 import javax.imageio.ImageIO;
@@ -49,7 +54,7 @@ public class CbxConversionService {
     }
 
     public File convertCbxToEpub(File cbxFile, File tempDir, BookEntity bookEntity) 
-            throws IOException, TemplateException {
+            throws IOException, TemplateException, RarException {
         validateInputs(cbxFile, tempDir);
         
         log.info("Starting CBX to EPUB conversion for: {}", cbxFile.getName());
@@ -62,7 +67,7 @@ public class CbxConversionService {
     }
 
     private File executeCbxConversion(File cbxFile, File tempDir, BookEntity bookEntity) 
-            throws IOException, TemplateException {
+            throws IOException, TemplateException, RarException {
         
         Path epubFilePath = Paths.get(tempDir.getAbsolutePath(),
                 cbxFile.getName().replaceFirst("\\.[^.]+$", "") + ".epub");
@@ -96,8 +101,9 @@ public class CbxConversionService {
             throw new IllegalArgumentException("Invalid CBX file: " + cbxFile);
         }
 
-        if (!cbxFile.getName().toLowerCase().endsWith(".cbz")) {
-            throw new IllegalArgumentException("Only CBZ files are currently supported: " + cbxFile.getName());
+        if (!isSupportedCbxFormat(cbxFile.getName())) {
+            throw new IllegalArgumentException("Unsupported file format: " + cbxFile.getName() + 
+                    ". Supported formats: CBZ, CBR, CB7");
         }
         
         if (tempDir == null || !tempDir.isDirectory()) {
@@ -115,17 +121,31 @@ public class CbxConversionService {
         return config;
     }
 
-    private List<BufferedImage> extractImagesFromCbx(File cbxFile) throws IOException {
+    private List<BufferedImage> extractImagesFromCbx(File cbxFile) throws IOException, RarException {
+        String fileName = cbxFile.getName().toLowerCase();
+        
+        if (fileName.endsWith(".cbz")) {
+            return extractImagesFromZip(cbxFile);
+        } else if (fileName.endsWith(".cbr")) {
+            return extractImagesFromRar(cbxFile);
+        } else if (fileName.endsWith(".cb7")) {
+            return extractImagesFrom7z(cbxFile);
+        } else {
+            throw new IllegalArgumentException("Unsupported archive format: " + fileName);
+        }
+    }
+    
+    private List<BufferedImage> extractImagesFromZip(File cbzFile) throws IOException {
         List<BufferedImage> images = new ArrayList<>();
         
-        try (ZipFile zipFile = new ZipFile(cbxFile)) {
+        try (ZipFile zipFile = new ZipFile(cbzFile)) {
             List<ZipArchiveEntry> imageEntries = Collections.list(zipFile.getEntries())
                     .stream()
                     .filter(entry -> !entry.isDirectory() && isImageFile(entry.getName()))
                     .sorted(Comparator.comparing(entry -> entry.getName().toLowerCase()))
                     .collect(Collectors.toList());
 
-            log.debug("Found {} image entries in CBX file", imageEntries.size());
+            log.debug("Found {} image entries in CBZ file", imageEntries.size());
 
             for (ZipArchiveEntry entry : imageEntries) {
                 try (InputStream inputStream = zipFile.getInputStream(entry)) {
@@ -139,6 +159,82 @@ public class CbxConversionService {
                 } catch (Exception e) {
                     log.warn("Error reading image {}: {}", entry.getName(), e.getMessage());
                 }
+            }
+        }
+        
+        return images;
+    }
+    
+    private List<BufferedImage> extractImagesFromRar(File cbrFile) throws IOException, RarException {
+        List<BufferedImage> images = new ArrayList<>();
+        
+        try (Archive rarFile = new Archive(cbrFile)) {
+            List<FileHeader> imageHeaders = new ArrayList<>();
+            
+            // Collect all image file headers
+            for (FileHeader fileHeader : rarFile) {
+                if (!fileHeader.isDirectory() && isImageFile(fileHeader.getFileName())) {
+                    imageHeaders.add(fileHeader);
+                }
+            }
+            
+            // Sort by filename
+            imageHeaders.sort(Comparator.comparing(FileHeader::getFileName, String.CASE_INSENSITIVE_ORDER));
+            
+            log.debug("Found {} image entries in CBR file", imageHeaders.size());
+            
+            for (FileHeader fileHeader : imageHeaders) {
+                try (InputStream inputStream = rarFile.getInputStream(fileHeader)) {
+                    BufferedImage image = ImageIO.read(inputStream);
+                    if (image != null) {
+                        images.add(image);
+                        log.debug("Successfully loaded image: {}", fileHeader.getFileName());
+                    } else {
+                        log.warn("Failed to load image (unsupported format?): {}", fileHeader.getFileName());
+                    }
+                } catch (Exception e) {
+                    log.warn("Error reading image {}: {}", fileHeader.getFileName(), e.getMessage());
+                }
+            }
+        }
+        
+        return images;
+    }
+    
+    private List<BufferedImage> extractImagesFrom7z(File cb7File) throws IOException {
+        List<BufferedImage> images = new ArrayList<>();
+        Map<String, byte[]> imageDataMap = new HashMap<>();
+        
+        // First pass: collect all image data
+        try (SevenZFile sevenZFile = SevenZFile.builder().setFile(cb7File).get()) {
+            SevenZArchiveEntry entry;
+            while ((entry = sevenZFile.getNextEntry()) != null) {
+                if (!entry.isDirectory() && isImageFile(entry.getName())) {
+                    byte[] imageData = new byte[(int) entry.getSize()];
+                    sevenZFile.read(imageData);
+                    imageDataMap.put(entry.getName(), imageData);
+                }
+            }
+        }
+        
+        log.debug("Found {} image entries in CB7 file", imageDataMap.size());
+        
+        // Sort filenames and process images in order
+        List<String> sortedImageNames = imageDataMap.keySet().stream()
+                .sorted(String.CASE_INSENSITIVE_ORDER)
+                .collect(Collectors.toList());
+        
+        for (String imageName : sortedImageNames) {
+            try (ByteArrayInputStream bis = new ByteArrayInputStream(imageDataMap.get(imageName))) {
+                BufferedImage image = ImageIO.read(bis);
+                if (image != null) {
+                    images.add(image);
+                    log.debug("Successfully loaded image: {}", imageName);
+                } else {
+                    log.warn("Failed to load image (unsupported format?): {}", imageName);
+                }
+            } catch (Exception e) {
+                log.warn("Error reading image {}: {}", imageName, e.getMessage());
             }
         }
         
@@ -335,8 +431,76 @@ public class CbxConversionService {
         
         if (bookEntity != null && bookEntity.getMetadata() != null) {
             var metadata = bookEntity.getMetadata();
+            
+            // Basic metadata
             model.put("title", metadata.getTitle() != null ? metadata.getTitle() : "Unknown Comic");
             model.put("language", metadata.getLanguage() != null ? metadata.getLanguage() : "en");
+            
+            // Only add optional metadata if it has content
+            if (metadata.getSubtitle() != null && !metadata.getSubtitle().trim().isEmpty()) {
+                model.put("subtitle", metadata.getSubtitle());
+            }
+            if (metadata.getDescription() != null && !metadata.getDescription().trim().isEmpty()) {
+                model.put("description", metadata.getDescription());
+            }
+            
+            // Series information
+            if (metadata.getSeriesName() != null && !metadata.getSeriesName().trim().isEmpty()) {
+                model.put("seriesName", metadata.getSeriesName());
+            }
+            if (metadata.getSeriesNumber() != null) {
+                model.put("seriesNumber", metadata.getSeriesNumber());
+            }
+            if (metadata.getSeriesTotal() != null) {
+                model.put("seriesTotal", metadata.getSeriesTotal());
+            }
+            
+            // Publication info
+            if (metadata.getPublisher() != null && !metadata.getPublisher().trim().isEmpty()) {
+                model.put("publisher", metadata.getPublisher());
+            }
+            if (metadata.getPublishedDate() != null) {
+                model.put("publishedDate", metadata.getPublishedDate());
+            }
+            if (metadata.getPageCount() != null && metadata.getPageCount() > 0) {
+                model.put("pageCount", metadata.getPageCount());
+            }
+            
+            // Identifiers - only add if not null and not empty
+            if (metadata.getIsbn13() != null && !metadata.getIsbn13().trim().isEmpty()) {
+                model.put("isbn13", metadata.getIsbn13());
+            }
+            if (metadata.getIsbn10() != null && !metadata.getIsbn10().trim().isEmpty()) {
+                model.put("isbn10", metadata.getIsbn10());
+            }
+            if (metadata.getAsin() != null && !metadata.getAsin().trim().isEmpty()) {
+                model.put("asin", metadata.getAsin());
+            }
+            if (metadata.getGoodreadsId() != null && !metadata.getGoodreadsId().trim().isEmpty()) {
+                model.put("goodreadsId", metadata.getGoodreadsId());
+            }
+            
+            // Authors
+            if (metadata.getAuthors() != null && !metadata.getAuthors().isEmpty()) {
+                model.put("authors", metadata.getAuthors().stream()
+                        .map(author -> author.getName())
+                        .toList());
+            }
+            
+            // Categories/Genres
+            if (metadata.getCategories() != null && !metadata.getCategories().isEmpty()) {
+                model.put("categories", metadata.getCategories().stream()
+                        .map(category -> category.getName())
+                        .toList());
+            }
+            
+            // Tags
+            if (metadata.getTags() != null && !metadata.getTags().isEmpty()) {
+                model.put("tags", metadata.getTags().stream()
+                        .map(tag -> tag.getName())
+                        .toList());
+            }
+            
             model.put("identifier", "urn:uuid:" + UUID.randomUUID());
         } else {
             model.put("title", "Unknown Comic");
@@ -394,7 +558,10 @@ public class CbxConversionService {
         if (fileName == null) {
             return false;
         }
-        return fileName.toLowerCase().endsWith(".cbz");
+        String lowerName = fileName.toLowerCase();
+        return lowerName.endsWith(".cbz") || 
+               lowerName.endsWith(".cbr") || 
+               lowerName.endsWith(".cb7");
     }
 
 }
