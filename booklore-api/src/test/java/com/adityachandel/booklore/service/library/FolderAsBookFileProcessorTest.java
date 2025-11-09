@@ -12,7 +12,7 @@ import com.adityachandel.booklore.service.event.BookEventBroadcaster;
 import com.adityachandel.booklore.service.event.AdminEventBroadcaster;
 import com.adityachandel.booklore.repository.BookAdditionalFileRepository;
 import com.adityachandel.booklore.repository.BookRepository;
-import com.adityachandel.booklore.service.FileFingerprint;
+import com.adityachandel.booklore.service.file.FileFingerprint;
 import com.adityachandel.booklore.service.fileprocessor.BookFileProcessor;
 import com.adityachandel.booklore.service.fileprocessor.BookFileProcessorRegistry;
 import com.adityachandel.booklore.util.FileUtils;
@@ -422,7 +422,7 @@ class FolderAsBookFileProcessorTest {
         book.setFileName(fileName);
         book.setFileSubPath(subPath);
         book.setBookType(BookFileType.PDF);
-        book.setAddedOn(Instant.now());
+        book.setAddedOn(Instant.parse("2025-01-01T12:00:00Z"));
 
         LibraryPathEntity libraryPath = new LibraryPathEntity();
         libraryPath.setId(1L);

@@ -28,7 +28,7 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.net.URL;
+import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -55,8 +55,9 @@ public class EpubMetadataWriter implements MetadataWriter {
         Path tempDir = null;
         try {
             tempDir = Files.createTempDirectory("epub_edit_" + UUID.randomUUID());
-            ZipFile zipFile = new ZipFile(epubFile);
-            zipFile.extractAll(tempDir.toString());
+            try (ZipFile zipFile = new ZipFile(epubFile)) {
+                zipFile.extractAll(tempDir.toString());
+            }
 
             File opfFile = findOpfFile(tempDir.toFile());
             if (opfFile == null) {
@@ -171,7 +172,9 @@ public class EpubMetadataWriter implements MetadataWriter {
                 transformer.transform(new DOMSource(opfDoc), new StreamResult(opfFile));
 
                 File tempEpub = new File(epubFile.getParentFile(), epubFile.getName() + ".tmp");
-                addFolderContentsToZip(new ZipFile(tempEpub), tempDir.toFile(), tempDir.toFile());
+                try (ZipFile tempZipFile = new ZipFile(tempEpub)) {
+                    addFolderContentsToZip(tempZipFile, tempDir.toFile(), tempDir.toFile());
+                }
 
                 if (!epubFile.delete()) throw new IOException("Could not delete original EPUB");
                 if (!tempEpub.renameTo(epubFile)) throw new IOException("Could not rename temp EPUB");
@@ -260,7 +263,9 @@ public class EpubMetadataWriter implements MetadataWriter {
         try {
             File epubFile = new File(bookEntity.getFullFilePath().toUri());
             tempDir = Files.createTempDirectory("epub_cover_" + UUID.randomUUID());
-            new ZipFile(epubFile).extractAll(tempDir.toString());
+            try (ZipFile zipFile = new ZipFile(epubFile)) {
+                zipFile.extractAll(tempDir.toString());
+            }
 
             File opfFile = findOpfFile(tempDir.toFile());
             if (opfFile == null) {
@@ -282,7 +287,9 @@ public class EpubMetadataWriter implements MetadataWriter {
             transformer.transform(new DOMSource(opfDoc), new StreamResult(opfFile));
 
             File tempEpub = new File(epubFile.getParentFile(), epubFile.getName() + ".tmp");
-            addFolderContentsToZip(new ZipFile(tempEpub), tempDir.toFile(), tempDir.toFile());
+            try (ZipFile tempZipFile = new ZipFile(tempEpub)) {
+                addFolderContentsToZip(tempZipFile, tempDir.toFile(), tempDir.toFile());
+            }
 
             if (!epubFile.delete()) throw new IOException("Could not delete original EPUB");
             if (!tempEpub.renameTo(epubFile)) throw new IOException("Could not rename temp EPUB");
@@ -308,7 +315,9 @@ public class EpubMetadataWriter implements MetadataWriter {
         try {
             File epubFile = new File(bookEntity.getFullFilePath().toUri());
             tempDir = Files.createTempDirectory("epub_cover_url_" + UUID.randomUUID());
-            new ZipFile(epubFile).extractAll(tempDir.toString());
+            try (ZipFile zipFile = new ZipFile(epubFile)) {
+                zipFile.extractAll(tempDir.toString());
+            }
 
             File opfFile = findOpfFile(tempDir.toFile());
             if (opfFile == null) {
@@ -335,7 +344,9 @@ public class EpubMetadataWriter implements MetadataWriter {
             transformer.transform(new DOMSource(opfDoc), new StreamResult(opfFile));
 
             File tempEpub = new File(epubFile.getParentFile(), epubFile.getName() + ".tmp");
-            addFolderContentsToZip(new ZipFile(tempEpub), tempDir.toFile(), tempDir.toFile());
+            try (ZipFile tempZipFile = new ZipFile(tempEpub)) {
+                addFolderContentsToZip(tempZipFile, tempDir.toFile(), tempDir.toFile());
+            }
 
             if (!epubFile.delete()) throw new IOException("Could not delete original EPUB");
             if (!tempEpub.renameTo(epubFile)) throw new IOException("Could not rename temp EPUB");
@@ -364,16 +375,59 @@ public class EpubMetadataWriter implements MetadataWriter {
         Element manifest = (Element) manifestList.item(0);
         Element existingCoverItem = null;
 
-        NodeList items = manifest.getElementsByTagNameNS(OPF_NS, "item");
-        for (int i = 0; i < items.getLength(); i++) {
-            Element item = (Element) items.item(i);
-            if ("cover-image".equals(item.getAttribute("id"))) {
-                existingCoverItem = item;
-                break;
+        // First, try to find cover via metadata reference (EPUB 3 style)
+        NodeList metadataList = opfDoc.getElementsByTagNameNS(OPF_NS, "metadata");
+        if (metadataList.getLength() > 0) {
+            Element metadataElement = (Element) metadataList.item(0);
+            String coverItemId = getMetaContentByName(metadataElement, "cover");
+
+            if (coverItemId != null && !coverItemId.isBlank()) {
+                // Find the item with this id
+                NodeList items = manifest.getElementsByTagNameNS(OPF_NS, "item");
+                for (int i = 0; i < items.getLength(); i++) {
+                    Element item = (Element) items.item(i);
+                    if (coverItemId.equals(item.getAttribute("id"))) {
+                        existingCoverItem = item;
+                        break;
+                    }
+                }
             }
         }
 
-        String coverHref = existingCoverItem != null ? existingCoverItem.getAttribute("href") : "images/cover.jpg";
+        // If not found, try looking for properties="cover-image" (EPUB 3)
+        if (existingCoverItem == null) {
+            NodeList items = manifest.getElementsByTagNameNS(OPF_NS, "item");
+            for (int i = 0; i < items.getLength(); i++) {
+                Element item = (Element) items.item(i);
+                String properties = item.getAttribute("properties");
+                if (properties != null && properties.contains("cover-image")) {
+                    existingCoverItem = item;
+                    break;
+                }
+            }
+        }
+
+        // If still not found, try common id values (EPUB 2 fallback)
+        if (existingCoverItem == null) {
+            NodeList items = manifest.getElementsByTagNameNS(OPF_NS, "item");
+            for (int i = 0; i < items.getLength(); i++) {
+                Element item = (Element) items.item(i);
+                String itemId = item.getAttribute("id");
+                if ("cover-image".equals(itemId) || "cover".equals(itemId) || "coverimg".equals(itemId)) {
+                    existingCoverItem = item;
+                    break;
+                }
+            }
+        }
+
+        if (existingCoverItem == null) {
+            throw new IOException("No cover item found in manifest");
+        }
+
+        String coverHref = existingCoverItem.getAttribute("href");
+        if (coverHref == null || coverHref.isBlank()) {
+            throw new IOException("Cover item has no href attribute");
+        }
 
         Path opfPath;
         try {
@@ -384,31 +438,9 @@ public class EpubMetadataWriter implements MetadataWriter {
 
         Path opfDir = opfPath.getParent();
         Path coverFilePath = opfDir.resolve(coverHref).normalize();
+
         Files.createDirectories(coverFilePath.getParent());
         Files.write(coverFilePath, coverData);
-
-        if (existingCoverItem != null) {
-            manifest.removeChild(existingCoverItem);
-        }
-
-        Element newItem = opfDoc.createElementNS(OPF_NS, "item");
-        newItem.setAttribute("id", "cover-image");
-        newItem.setAttribute("href", coverHref);
-        newItem.setAttribute("media-type", "image/jpeg");
-        manifest.appendChild(newItem);
-
-        NodeList metadataList = opfDoc.getElementsByTagNameNS(OPF_NS, "metadata");
-        if (metadataList.getLength() == 0) {
-            throw new IOException("No <metadata> element found in OPF document.");
-        }
-
-        Element metadataElement = (Element) metadataList.item(0);
-        removeMetaByName(metadataElement, "cover");
-
-        Element meta = opfDoc.createElementNS(OPF_NS, "meta");
-        meta.setAttribute("name", "cover");
-        meta.setAttribute("content", "cover-image");
-        metadataElement.appendChild(meta);
     }
 
     private Path findOpfPath(Path tempDir) throws IOException, ParserConfigurationException, SAXException {
@@ -444,7 +476,7 @@ public class EpubMetadataWriter implements MetadataWriter {
     }
 
     private byte[] loadImage(String pathOrUrl) {
-        try (InputStream stream = pathOrUrl.startsWith("http") ? new URL(pathOrUrl).openStream() : new FileInputStream(pathOrUrl)) {
+        try (InputStream stream = pathOrUrl.startsWith("http") ? URI.create(pathOrUrl).toURL().openStream() : new FileInputStream(pathOrUrl)) {
             return stream.readAllBytes();
         } catch (IOException e) {
             log.warn("Failed to load image from {}: {}", pathOrUrl, e.getMessage());

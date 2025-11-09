@@ -14,7 +14,7 @@ import com.adityachandel.booklore.repository.BookRepository;
 import com.adityachandel.booklore.repository.CategoryRepository;
 import com.adityachandel.booklore.repository.MoodRepository;
 import com.adityachandel.booklore.repository.TagRepository;
-import com.adityachandel.booklore.service.FileFingerprint;
+import com.adityachandel.booklore.service.file.FileFingerprint;
 import com.adityachandel.booklore.service.appsettings.AppSettingService;
 import com.adityachandel.booklore.service.file.FileMoveService;
 import com.adityachandel.booklore.service.metadata.writer.MetadataWriterFactory;
@@ -29,7 +29,7 @@ import org.springframework.util.StringUtils;
 
 import java.io.File;
 import java.net.InetAddress;
-import java.net.URL;
+import java.net.URI;
 import java.time.Instant;
 import java.util.*;
 import java.util.function.Consumer;
@@ -401,8 +401,8 @@ public class BookMetadataUpdater {
 
     private boolean isLocalOrPrivateUrl(String url) {
         try {
-            URL parsed = new URL(url);
-            String host = parsed.getHost();
+            URI uri = new URI(url);
+            String host = uri.getHost();
             if ("localhost".equalsIgnoreCase(host) || "127.0.0.1".equals(host)) return true;
             InetAddress addr = InetAddress.getByName(host);
             return addr.isLoopbackAddress() || addr.isSiteLocalAddress();

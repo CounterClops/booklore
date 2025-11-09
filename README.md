@@ -6,8 +6,6 @@
 ![Docker Pulls](https://img.shields.io/docker/pulls/booklore/booklore?color=2496ED)
 [![Join us on Discord](https://img.shields.io/badge/Chat-Discord-5865F2?logo=discord&style=flat)](https://discord.gg/Ee5hd458Uz)
 [![Open Collective backers and sponsors](https://img.shields.io/opencollective/all/booklore?label=Open%20Collective&logo=opencollective&color=7FADF2)](https://opencollective.com/booklore)
-[![Venmo](https://img.shields.io/badge/Venmo-Donate-008CFF?logo=venmo)](https://venmo.com/AdityaChandel)
-
 > 🚨 **Important Announcement:**  
 > Docker images have moved to new repositories:
 > - Docker Hub: `https://hub.docker.com/r/booklore/booklore`
@@ -230,11 +228,10 @@ For detailed setup instructions and configuration examples:
 - ✨ Want to contribute? [Check out CONTRIBUTING.md](https://github.com/adityachandelgit/BookLore/blob/master/CONTRIBUTING.md)
 - 💬 **Join our Discord**: [Click here to chat with the community](https://discord.gg/Ee5hd458Uz)
 
-## 👨‍💻 Contributors & Developers
+## 📊 Repository Activity
 
-Thanks to all the amazing people who contribute to Booklore.
+![Alt](https://repobeats.axiom.co/api/embed/44a04220bfc5136e7064181feb07d5bf0e59e27e.svg "Repobeats analytics image")
 
-[![Contributors List](https://contrib.rocks/image?repo=adityachandelgit/BookLore)](https://github.com/adityachandelgit/BookLore/graphs/contributors)
 
 ## ⭐ Star History
 
@@ -245,6 +242,12 @@ Thanks to all the amazing people who contribute to Booklore.
    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=booklore-app/booklore&type=date&legend=top-left" />
  </picture>
 </a>
+
+## 👨‍💻 Contributors & Developers
+
+Thanks to all the amazing people who contribute to Booklore.
+
+[![Contributors List](https://contrib.rocks/image?repo=adityachandelgit/BookLore)](https://github.com/adityachandelgit/BookLore/graphs/contributors)
 
 ## ⚖️ License
 
