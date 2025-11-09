@@ -81,7 +81,6 @@ public class CbxConversionService {
         log.debug("Extracted {} images from CBX file", images.size());
 
         try (ZipArchiveOutputStream zipOut = new ZipArchiveOutputStream(new FileOutputStream(epubFile))) {
-            // Create EPUB structure
             addMimetypeEntry(zipOut);
             addMetaInfContainer(zipOut);
             addStylesheet(zipOut);
@@ -171,14 +170,12 @@ public class CbxConversionService {
         try (Archive rarFile = new Archive(cbrFile)) {
             List<FileHeader> imageHeaders = new ArrayList<>();
             
-            // Collect all image file headers
             for (FileHeader fileHeader : rarFile) {
                 if (!fileHeader.isDirectory() && isImageFile(fileHeader.getFileName())) {
                     imageHeaders.add(fileHeader);
                 }
             }
             
-            // Sort by filename
             imageHeaders.sort(Comparator.comparing(FileHeader::getFileName, String.CASE_INSENSITIVE_ORDER));
             
             log.debug("Found {} image entries in CBR file", imageHeaders.size());
@@ -205,7 +202,6 @@ public class CbxConversionService {
         List<BufferedImage> images = new ArrayList<>();
         Map<String, byte[]> imageDataMap = new HashMap<>();
         
-        // First pass: collect all image data
         try (SevenZFile sevenZFile = SevenZFile.builder().setFile(cb7File).get()) {
             SevenZArchiveEntry entry;
             while ((entry = sevenZFile.getNextEntry()) != null) {
@@ -219,7 +215,6 @@ public class CbxConversionService {
         
         log.debug("Found {} image entries in CB7 file", imageDataMap.size());
         
-        // Sort filenames and process images in order
         List<String> sortedImageNames = imageDataMap.keySet().stream()
                 .sorted(String.CASE_INSENSITIVE_ORDER)
                 .collect(Collectors.toList());
@@ -284,12 +279,10 @@ public class CbxConversionService {
         
         List<EpubContentFileGroup> contentGroups = new ArrayList<>();
 
-        // Add cover image
         if (!images.isEmpty()) {
             addImageToZip(zipOut, COVER_IMAGE_PATH, images.get(0));
         }
 
-        // Add each page
         for (int i = 0; i < images.size(); i++) {
             BufferedImage image = images.get(i);
             String contentKey = String.format("page-%04d", i + 1);
@@ -299,10 +292,8 @@ public class CbxConversionService {
             String imagePath = IMAGE_ROOT_PATH + imageFileName;
             String htmlPath = HTML_ROOT_PATH + htmlFileName;
 
-            // Add image
             addImageToZip(zipOut, imagePath, image);
 
-            // Add HTML page
             String htmlContent = generatePageHtml(imageFileName, i + 1);
             ZipArchiveEntry htmlEntry = new ZipArchiveEntry(htmlPath);
             zipOut.putArchiveEntry(htmlEntry);
@@ -320,7 +311,6 @@ public class CbxConversionService {
         ZipArchiveEntry imageEntry = new ZipArchiveEntry(imagePath);
         zipOut.putArchiveEntry(imageEntry);
         
-        // Write JPEG with compression for smaller file size
         writeJpegImage(image, zipOut, 0.85f);
         
         zipOut.closeArchiveEntry();
@@ -328,7 +318,6 @@ public class CbxConversionService {
     
     private void writeJpegImage(BufferedImage image, ZipArchiveOutputStream zipOut, float quality) 
             throws IOException {
-        // Convert to RGB if necessary (JPEG doesn't support transparency)
         BufferedImage rgbImage = image;
         if (image.getType() != BufferedImage.TYPE_INT_RGB) {
             rgbImage = new BufferedImage(image.getWidth(), image.getHeight(), BufferedImage.TYPE_INT_RGB);
@@ -336,10 +325,8 @@ public class CbxConversionService {
             rgbImage.getGraphics().dispose();
         }
         
-        // Use ByteArrayOutputStream to avoid issues with ImageOutputStream over ZipArchiveOutputStream
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         
-        // Get JPEG writer
         ImageWriter writer = ImageIO.getImageWritersByFormatName("jpg").next();
         ImageWriteParam param = writer.getDefaultWriteParam();
         
@@ -348,7 +335,6 @@ public class CbxConversionService {
             param.setCompressionQuality(quality);
         }
         
-        // Write the image to ByteArrayOutputStream first
         try (ImageOutputStream ios = ImageIO.createImageOutputStream(baos)) {
             writer.setOutput(ios);
             writer.write(null, new IIOImage(rgbImage, null, null), param);
@@ -356,7 +342,6 @@ public class CbxConversionService {
             writer.dispose();
         }
         
-        // Then write the bytes to the ZIP stream
         zipOut.write(baos.toByteArray());
     }
 
@@ -374,7 +359,6 @@ public class CbxConversionService {
         
         Map<String, Object> model = createBookMetadataModel(bookEntity);
         
-        // Convert full paths to relative paths for content.opf (which is inside OEBPS/)
         List<EpubContentFileGroup> relativeContentGroups = contentGroups.stream()
                 .map(group -> new EpubContentFileGroup(
                         group.contentKey(),
@@ -432,11 +416,9 @@ public class CbxConversionService {
         if (bookEntity != null && bookEntity.getMetadata() != null) {
             var metadata = bookEntity.getMetadata();
             
-            // Basic metadata
             model.put("title", metadata.getTitle() != null ? metadata.getTitle() : "Unknown Comic");
             model.put("language", metadata.getLanguage() != null ? metadata.getLanguage() : "en");
             
-            // Only add optional metadata if it has content
             if (metadata.getSubtitle() != null && !metadata.getSubtitle().trim().isEmpty()) {
                 model.put("subtitle", metadata.getSubtitle());
             }
@@ -444,7 +426,6 @@ public class CbxConversionService {
                 model.put("description", metadata.getDescription());
             }
             
-            // Series information
             if (metadata.getSeriesName() != null && !metadata.getSeriesName().trim().isEmpty()) {
                 model.put("seriesName", metadata.getSeriesName());
             }
@@ -455,7 +436,6 @@ public class CbxConversionService {
                 model.put("seriesTotal", metadata.getSeriesTotal());
             }
             
-            // Publication info
             if (metadata.getPublisher() != null && !metadata.getPublisher().trim().isEmpty()) {
                 model.put("publisher", metadata.getPublisher());
             }
@@ -466,7 +446,6 @@ public class CbxConversionService {
                 model.put("pageCount", metadata.getPageCount());
             }
             
-            // Identifiers - only add if not null and not empty
             if (metadata.getIsbn13() != null && !metadata.getIsbn13().trim().isEmpty()) {
                 model.put("isbn13", metadata.getIsbn13());
             }
@@ -480,21 +459,18 @@ public class CbxConversionService {
                 model.put("goodreadsId", metadata.getGoodreadsId());
             }
             
-            // Authors
             if (metadata.getAuthors() != null && !metadata.getAuthors().isEmpty()) {
                 model.put("authors", metadata.getAuthors().stream()
                         .map(author -> author.getName())
                         .toList());
             }
             
-            // Categories/Genres
             if (metadata.getCategories() != null && !metadata.getCategories().isEmpty()) {
                 model.put("categories", metadata.getCategories().stream()
                         .map(category -> category.getName())
                         .toList());
             }
             
-            // Tags
             if (metadata.getTags() != null && !metadata.getTags().isEmpty()) {
                 model.put("tags", metadata.getTags().stream()
                         .map(tag -> tag.getName())
@@ -540,7 +516,6 @@ public class CbxConversionService {
         Path oebpsPath = Paths.get("OEBPS");
         Path targetPath = Paths.get(fullPath);
         
-        // If the path starts with OEBPS, make it relative to OEBPS directory
         if (targetPath.startsWith(oebpsPath)) {
             return oebpsPath.relativize(targetPath).toString();
         }
