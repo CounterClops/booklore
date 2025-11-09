@@ -114,7 +114,7 @@ class CbxConversionIntegrationTest {
     }
 
     private void verifyEpubContents(File epubFile, BookEntity expectedMetadata) throws IOException {
-        try (ZipFile zipFile = new ZipFile(epubFile)) {
+        try (ZipFile zipFile = ZipFile.builder().setFile(epubFile).get()) {
             List<String> entryNames = Collections.list(zipFile.getEntries())
                     .stream()
                     .map(ZipArchiveEntry::getName)

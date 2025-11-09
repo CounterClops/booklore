@@ -137,7 +137,7 @@ public class CbxConversionService {
     private List<BufferedImage> extractImagesFromZip(File cbzFile) throws IOException {
         List<BufferedImage> images = new ArrayList<>();
         
-        try (ZipFile zipFile = new ZipFile(cbzFile)) {
+        try (ZipFile zipFile = ZipFile.builder().setFile(cbzFile).get()) {
             List<ZipArchiveEntry> imageEntries = Collections.list(zipFile.getEntries())
                     .stream()
                     .filter(entry -> !entry.isDirectory() && isImageFile(entry.getName()))

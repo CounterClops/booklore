@@ -206,7 +206,7 @@ class CbxConversionServiceTest {
     }
 
     private void verifyEpubStructure(File epubFile) throws IOException {
-        try (ZipFile zipFile = new ZipFile(epubFile)) {
+        try (ZipFile zipFile = ZipFile.builder().setFile(epubFile).get()) {
             List<ZipArchiveEntry> entries = Collections.list(zipFile.getEntries());
             
             assertThat(entries).extracting(ZipArchiveEntry::getName)
@@ -236,7 +236,7 @@ class CbxConversionServiceTest {
     }
 
     private void verifyPageOrderInEpub(File epubFile, int expectedPageCount) throws IOException {
-        try (ZipFile zipFile = new ZipFile(epubFile)) {
+        try (ZipFile zipFile = ZipFile.builder().setFile(epubFile).get()) {
             List<ZipArchiveEntry> imageEntries = Collections.list(zipFile.getEntries()).stream()
                     .filter(entry -> entry.getName().startsWith("OEBPS/Images/page-"))
                     .sorted((e1, e2) -> e1.getName().compareTo(e2.getName()))
