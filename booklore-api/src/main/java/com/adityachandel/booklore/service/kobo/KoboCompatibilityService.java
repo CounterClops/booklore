@@ -23,17 +23,14 @@ public class KoboCompatibilityService {
             return false;
         }
         
-        // EPUB files are always supported
         if (bookType == BookFileType.EPUB) {
             return true;
         }
         
-        // CBX files are supported only if CBX conversion is enabled AND within size limit
         if (bookType == BookFileType.CBX) {
             return isCbxConversionEnabled() && meetsCbxConversionSizeLimit(book);
         }
         
-        // Other file types are not supported
         return false;
     }
 
@@ -42,8 +39,6 @@ public class KoboCompatibilityService {
             KoboSettings koboSettings = appSettingService.getAppSettings().getKoboSettings();
             return koboSettings != null && koboSettings.isConvertCbxToEpub();
         } catch (Exception e) {
-            // Log warning and fail safely if settings cannot be retrieved
-            // This ensures Kobo sync doesn't break if there are settings issues
             return false;
         }
     }
@@ -64,7 +59,6 @@ public class KoboCompatibilityService {
             
             return fileSizeKb <= limitKb;
         } catch (Exception e) {
-            // Fail safely if settings cannot be retrieved
             return false;
         }
     }
