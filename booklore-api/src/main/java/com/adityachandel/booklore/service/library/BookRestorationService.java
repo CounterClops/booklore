@@ -30,52 +30,16 @@ public class BookRestorationService {
     private final NotificationService notificationService;
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void restoreDeletedBooks(List<LibraryFile> libraryFiles) {
+    public void restoreDeletedBooks(List<LibraryFile> libraryFiles, LibraryEntity libraryEntity) {
         if (libraryFiles.isEmpty()) return;
 
-        LibraryEntity libraryEntity = libraryFiles.getFirst().getLibraryEntity();
         Set<Path> currentPaths = libraryFiles.stream()
                 .map(LibraryFile::getFullPath)
                 .collect(Collectors.toSet());
-        
-        // Build hash map for moved file detection
-        Map<String, Path> hashToPathMap = new HashMap<>();
-        for (LibraryFile file : libraryFiles) {
-            try {
-                if (Files.exists(file.getFullPath())) {
-                    String hash = FileFingerprint.generateHash(file.getFullPath());
-                    if (hash != null && !hash.isEmpty()) {
-                        hashToPathMap.put(hash, file.getFullPath());
-                    }
-                }
-            } catch (Exception e) {
-                log.debug("Could not calculate hash for '{}': {}", file.getFullPath(), e.getMessage());
-            }
-        }
 
         List<BookEntity> toRestore = libraryEntity.getBookEntities().stream()
                 .filter(book -> Boolean.TRUE.equals(book.getDeleted()))
-                .filter(book -> {
-                    // Restore if exact path match
-                    if (currentPaths.contains(book.getFullFilePath())) {
-                        return true;
-                    }
-                    
-                    // Restore if hash matches (file was moved/renamed)
-                    String currentHash = book.getCurrentHash();
-                    if (currentHash != null && !currentHash.isEmpty() && hashToPathMap.containsKey(currentHash)) {
-                        log.debug("Book {} will be restored via hash match '{}'", book.getId(), currentHash);
-                        return true;
-                    }
-                    
-                    String initialHash = book.getInitialHash();
-                    if (initialHash != null && !initialHash.isEmpty() && hashToPathMap.containsKey(initialHash)) {
-                        log.debug("Book {} will be restored via hash match '{}'", book.getId(), initialHash);
-                        return true;
-                    }
-                    
-                    return false;
-                })
+                .filter(book -> isBookFoundInCurrentFiles(book, currentPaths))
                 .collect(Collectors.toList());
 
         if (toRestore.isEmpty()) return;
@@ -93,5 +57,49 @@ public class BookRestorationService {
                 .toList();
 
         log.info("Restored {} books in library: {}", restoredIds.size(), libraryEntity.getName());
+    }
+
+    private boolean isBookFoundInCurrentFiles(BookEntity book, Set<Path> currentPaths) {
+        if (currentPaths.contains(book.getFullFilePath())) {
+            return true;
+        }
+        
+        if (bookHashExistsInPaths(book.getCurrentHash(), currentPaths, book.getId())) {
+            return true;
+        }
+        
+        String initialHash = book.getInitialHash();
+        if (initialHash != null && !initialHash.equals(book.getCurrentHash())) {
+            return bookHashExistsInPaths(initialHash, currentPaths, book.getId());
+        }
+        
+        return false;
+    }
+
+    private boolean bookHashExistsInPaths(String hash, Set<Path> paths, Long bookId) {
+        if (hash == null || hash.isEmpty()) {
+            return false;
+        }
+        
+        boolean exists = paths.stream().anyMatch(path -> pathMatchesHash(path, hash));
+        
+        if (exists) {
+            log.debug("Book {} will be restored via hash match '{}'", bookId, hash);
+        }
+        
+        return exists;
+    }
+
+    private boolean pathMatchesHash(Path path, String expectedHash) {
+        try {
+            if (!Files.exists(path)) {
+                return false;
+            }
+            String fileHash = FileFingerprint.generateHash(path);
+            return expectedHash.equals(fileHash);
+        } catch (Exception e) {
+            log.trace("Could not check hash for '{}': {}", path, e.getMessage());
+            return false;
+        }
     }
 }
