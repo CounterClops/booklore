@@ -22,6 +22,9 @@ public interface BookRepository extends JpaRepository<BookEntity, Long>, JpaSpec
 
     Optional<BookEntity> findByCurrentHash(String currentHash);
 
+    @Query("SELECT b FROM BookEntity b WHERE b.library.id = :libraryId AND (b.currentHash = :hash OR b.initialHash = :hash) AND (b.deleted IS NULL OR b.deleted = false) ORDER BY b.addedOn DESC")
+    List<BookEntity> findAllByCurrentHashOrInitialHashAndLibrary(@Param("hash") String hash, @Param("libraryId") Long libraryId);
+
     @Query("SELECT b.id FROM BookEntity b WHERE b.library.id = :libraryId AND (b.deleted IS NULL OR b.deleted = false)")
     Set<Long> findBookIdsByLibraryId(@Param("libraryId") long libraryId);
 

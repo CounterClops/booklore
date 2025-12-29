@@ -11,6 +11,7 @@ import com.adityachandel.booklore.repository.BookRepository;
 import com.adityachandel.booklore.service.book.BookCreatorService;
 import com.adityachandel.booklore.service.metadata.MetadataMatchService;
 import com.adityachandel.booklore.service.metadata.extractor.PdfMetadataExtractor;
+import com.adityachandel.booklore.service.watcher.BookFilePersistenceService;
 import com.adityachandel.booklore.util.FileService;
 import com.adityachandel.booklore.util.FileUtils;
 import lombok.extern.slf4j.Slf4j;
@@ -43,8 +44,9 @@ public class PdfProcessor extends AbstractFileProcessor implements BookFileProce
                         FileService fileService,
                         BookMetadataRepository bookMetadataRepository,
                         MetadataMatchService metadataMatchService,
+                        BookFilePersistenceService bookFilePersistenceService,
                         PdfMetadataExtractor pdfMetadataExtractor) {
-        super(bookRepository, bookAdditionalFileRepository, bookCreatorService, bookMapper, fileService, metadataMatchService);
+        super(bookRepository, bookAdditionalFileRepository, bookCreatorService, bookMapper, fileService, metadataMatchService, bookFilePersistenceService);
         this.pdfMetadataExtractor = pdfMetadataExtractor;
         this.bookMetadataRepository = bookMetadataRepository;
     }

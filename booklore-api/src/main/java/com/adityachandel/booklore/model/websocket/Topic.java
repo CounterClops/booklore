@@ -8,6 +8,7 @@ import lombok.Getter;
 public enum Topic {
     BOOK_ADD("/queue/book-add"),
     BOOK_UPDATE("/queue/book-update"),
+    BOOK_RELINKED("/queue/book-relinked"),
     BOOKS_COVER_UPDATE("/queue/books-cover-update"),
     BOOKS_REMOVE("/queue/books-remove"),
     BOOK_METADATA_UPDATE("/queue/book-metadata-update"),

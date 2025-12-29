@@ -40,19 +40,39 @@ public class BookFilePersistenceService {
         newLibraryPath = entityManager.merge(newLibraryPath);
 
         String newSubPath = FileUtils.getRelativeSubPath(newLibraryPath.getPath(), path);
+        Path fileNamePath = path.getFileName();
+        if (fileNamePath == null) {
+            throw new IllegalArgumentException("Path has no filename: " + path);
+        }
+        String newFileName = fileNamePath.toString();
 
-        boolean pathChanged = !Objects.equals(newSubPath, book.getFileSubPath()) || !Objects.equals(newLibraryPath.getId(), book.getLibraryPath().getId());
+        LibraryPathEntity currentLibraryPath = book.getLibraryPath();
+        if (currentLibraryPath == null) {
+            throw new IllegalStateException("Book has no library path: bookId=" + book.getId());
+        }
+
+        boolean pathChanged = !Objects.equals(newSubPath, book.getFileSubPath()) 
+                           || !Objects.equals(newLibraryPath.getId(), currentLibraryPath.getId())
+                           || !Objects.equals(newFileName, book.getFileName());
 
         if (pathChanged || Boolean.TRUE.equals(book.getDeleted())) {
             book.setLibraryPath(newLibraryPath);
             book.setFileSubPath(newSubPath);
+            book.setFileName(newFileName);
             book.setDeleted(Boolean.FALSE);
             bookRepository.save(book);
-            log.info("[FILE_CREATE] Updated path / undeleted existing book with hash '{}': '{}'", currentHash, path);
+            
+            if (pathChanged) {
+                log.info("[FILE_RELINK] Book relinked to new path via hash '{}': '{}'", currentHash, path);
+                notificationService.sendMessageToPermissions(Topic.BOOK_RELINKED, bookMapper.toBookWithDescription(book, false), Set.of(ADMIN, MANAGE_LIBRARY));
+            } else {
+                log.info("[FILE_CREATE] Undeleted existing book with hash '{}': '{}'", currentHash, path);
+                notificationService.sendMessageToPermissions(Topic.BOOK_ADD, bookMapper.toBookWithDescription(book, false), Set.of(ADMIN, MANAGE_LIBRARY));
+            }
         } else {
             log.info("[FILE_CREATE] Book with hash '{}' already exists at same path. Skipping update.", currentHash);
+            notificationService.sendMessageToPermissions(Topic.BOOK_ADD, bookMapper.toBookWithDescription(book, false), Set.of(ADMIN, MANAGE_LIBRARY));
         }
-        notificationService.sendMessageToPermissions(Topic.BOOK_ADD, bookMapper.toBookWithDescription(book, false), Set.of(ADMIN, MANAGE_LIBRARY));
     }
 
     String findMatchingLibraryPath(LibraryEntity libraryEntity, Path filePath) {
