@@ -41,21 +41,16 @@ public class HashMigrationService {
             return;
         }
 
-        if (migrationInProgress.compareAndSet(false, true)) {
-            try {
-                log.info("[SCHEDULED_HASH_MIGRATION] Starting background hash regeneration");
-                HashMigrationResult result = regenerateMissingHashes(MAX_BOOKS_PER_RUN);
-                
-                if (result.processed() > 0) {
-                    log.info("[SCHEDULED_HASH_MIGRATION] Completed: processed={}, updated={}, failed={}", 
-                            result.processed(), result.updated(), result.failed());
-                }
-            } finally {
-                migrationInProgress.set(false);
+        tryExecuteMigrationWithLock(() -> {
+            log.info("[SCHEDULED_HASH_MIGRATION] Starting background hash regeneration");
+            HashMigrationResult result = regenerateMissingHashesInternal(MAX_BOOKS_PER_RUN);
+            
+            if (result.processed() > 0) {
+                log.info("[SCHEDULED_HASH_MIGRATION] Completed: processed={}, updated={}, failed={}", 
+                        result.processed(), result.updated(), result.failed());
             }
-        } else {
-            log.debug("Skipping scheduled migration - another migration already in progress");
-        }
+            return null;
+        }, "Skipping scheduled migration - another migration already in progress");
     }
 
     public void performStartupMigration() {
@@ -64,7 +59,7 @@ public class HashMigrationService {
             return;
         }
 
-        if (migrationInProgress.compareAndSet(false, true)) {
+        tryExecuteMigrationWithLock(() -> {
             try {
                 log.info("[STARTUP_MIGRATION] Starting hash migration for books with missing hashes");
                 
@@ -72,12 +67,12 @@ public class HashMigrationService {
                 if (totalMissing == 0) {
                     log.info("[STARTUP_MIGRATION] No books with missing hashes found");
                     startupMigrationCompleted.set(true);
-                    return;
+                    return null;
                 }
 
                 log.info("[STARTUP_MIGRATION] Found {} books with missing hashes", totalMissing);
                 
-                HashMigrationResult result = regenerateMissingHashes(null);
+                HashMigrationResult result = regenerateMissingHashesInternal(null);
                 
                 log.info("[STARTUP_MIGRATION] Completed: processed={}, updated={}, failed={}, duration={}ms", 
                         result.processed(), result.updated(), result.failed(), result.durationMs());
@@ -85,22 +80,18 @@ public class HashMigrationService {
                 startupMigrationCompleted.set(true);
                 
                 sendNotification(result, "Startup hash migration completed");
+                return null;
                 
             } catch (Exception e) {
                 log.error("[STARTUP_MIGRATION] Failed: {}", e.getMessage(), e);
                 startupMigrationCompleted.set(true);
-            } finally {
-                migrationInProgress.set(false);
+                return null;
             }
-        }
+        }, "Skipping startup migration - another migration already in progress");
     }
 
     public HashMigrationResult regenerateAllHashes() {
-        if (!migrationInProgress.compareAndSet(false, true)) {
-            throw new IllegalStateException("Hash migration already in progress");
-        }
-
-        try {
+        return executeMigrationWithLock(() -> {
             log.info("[HASH_REGENERATE_ALL] Starting full hash regeneration for all books");
             long startTime = System.currentTimeMillis();
             
@@ -139,61 +130,76 @@ public class HashMigrationService {
             sendNotification(result, "Full hash regeneration completed");
             
             return result;
+        });
+    }
+
+    public HashMigrationResult regenerateMissingHashes(Integer maxBooks) {
+        return executeMigrationWithLock(() -> regenerateMissingHashesInternal(maxBooks));
+    }
+
+    private HashMigrationResult regenerateMissingHashesInternal(Integer maxBooks) {
+        log.info("[HASH_REGENERATE_MISSING] Starting hash regeneration for books with missing hashes");
+        long startTime = System.currentTimeMillis();
+        
+        AtomicInteger processed = new AtomicInteger(0);
+        AtomicInteger updated = new AtomicInteger(0);
+        AtomicInteger failed = new AtomicInteger(0);
+        
+        int pageNumber = 0;
+        Slice<BookEntity> slice;
+        
+        do {
+            slice = bookRepository.findBooksWithMissingHashes(PageRequest.of(pageNumber, BATCH_SIZE));
             
+            for (BookEntity book : slice.getContent()) {
+                if (maxBooks != null && processed.get() >= maxBooks) {
+                    log.info("[HASH_REGENERATE_MISSING] Reached max books limit: {}", maxBooks);
+                    break;
+                }
+                
+                if (processBookHash(book, false)) {
+                    updated.incrementAndGet();
+                } else {
+                    failed.incrementAndGet();
+                }
+                processed.incrementAndGet();
+            }
+            
+            pageNumber++;
+            
+            if (slice.hasNext() && (maxBooks == null || processed.get() < maxBooks)) {
+                sleep(BATCH_DELAY_MS);
+            }
+            
+        } while (slice.hasNext() && (maxBooks == null || processed.get() < maxBooks));
+        
+        long duration = System.currentTimeMillis() - startTime;
+        HashMigrationResult result = new HashMigrationResult(
+                processed.get(), updated.get(), failed.get(), duration);
+        
+        log.info("[HASH_REGENERATE_MISSING] Completed: {}", result);
+        
+        return result;
+    }
+
+    private <T> T executeMigrationWithLock(java.util.function.Supplier<T> migrationWork) {
+        if (!migrationInProgress.compareAndSet(false, true)) {
+            throw new IllegalStateException("Hash migration already in progress");
+        }
+        try {
+            return migrationWork.get();
         } finally {
             migrationInProgress.set(false);
         }
     }
 
-    public HashMigrationResult regenerateMissingHashes(Integer maxBooks) {
+    private <T> T tryExecuteMigrationWithLock(java.util.function.Supplier<T> migrationWork, String skipMessage) {
         if (!migrationInProgress.compareAndSet(false, true)) {
-            throw new IllegalStateException("Hash migration already in progress");
+            log.debug(skipMessage);
+            return null;
         }
-
         try {
-            log.info("[HASH_REGENERATE_MISSING] Starting hash regeneration for books with missing hashes");
-            long startTime = System.currentTimeMillis();
-            
-            AtomicInteger processed = new AtomicInteger(0);
-            AtomicInteger updated = new AtomicInteger(0);
-            AtomicInteger failed = new AtomicInteger(0);
-            
-            int pageNumber = 0;
-            Slice<BookEntity> slice;
-            
-            do {
-                slice = bookRepository.findBooksWithMissingHashes(PageRequest.of(pageNumber, BATCH_SIZE));
-                
-                for (BookEntity book : slice.getContent()) {
-                    if (maxBooks != null && processed.get() >= maxBooks) {
-                        log.info("[HASH_REGENERATE_MISSING] Reached max books limit: {}", maxBooks);
-                        break;
-                    }
-                    
-                    if (processBookHash(book, false)) {
-                        updated.incrementAndGet();
-                    } else {
-                        failed.incrementAndGet();
-                    }
-                    processed.incrementAndGet();
-                }
-                
-                pageNumber++;
-                
-                if (slice.hasNext() && (maxBooks == null || processed.get() < maxBooks)) {
-                    sleep(BATCH_DELAY_MS);
-                }
-                
-            } while (slice.hasNext() && (maxBooks == null || processed.get() < maxBooks));
-            
-            long duration = System.currentTimeMillis() - startTime;
-            HashMigrationResult result = new HashMigrationResult(
-                    processed.get(), updated.get(), failed.get(), duration);
-            
-            log.info("[HASH_REGENERATE_MISSING] Completed: {}", result);
-            
-            return result;
-            
+            return migrationWork.get();
         } finally {
             migrationInProgress.set(false);
         }
