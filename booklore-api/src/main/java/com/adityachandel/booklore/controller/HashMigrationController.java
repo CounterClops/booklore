@@ -51,15 +51,4 @@ public class HashMigrationController {
         HashMigrationResult result = hashMigrationService.regenerateMissingHashes(null);
         return ResponseEntity.ok(result);
     }
-
-    @Operation(
-            summary = "Trigger startup migration",
-            description = "Manually trigger the startup migration process. Only needed if automatic startup migration was disabled or failed."
-    )
-    @ApiResponse(responseCode = "200", description = "Startup migration triggered")
-    @PostMapping("/startup-migration")
-    public ResponseEntity<Void> triggerStartupMigration() {
-        new Thread(() -> hashMigrationService.performStartupMigration(), "manual-startup-migration").start();
-        return ResponseEntity.accepted().build();
-    }
 }

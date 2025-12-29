@@ -7,19 +7,22 @@ import org.springframework.context.event.EventListener;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
+import java.util.concurrent.Executor;
+
 @Component
 @Slf4j
 @AllArgsConstructor
 public class HashMigrationStartupListener {
 
     private final HashMigrationService hashMigrationService;
+    private final Executor taskExecutor;
 
     @EventListener(ApplicationReadyEvent.class)
     @Order(100)
     public void onApplicationReady() {
-        log.info("Application ready - triggering startup hash migration");
+        log.info("Application ready - scheduling startup hash migration");
         
-        new Thread(() -> {
+        taskExecutor.execute(() -> {
             try {
                 Thread.sleep(5000);
                 hashMigrationService.performStartupMigration();
@@ -29,6 +32,6 @@ public class HashMigrationStartupListener {
             } catch (Exception e) {
                 log.error("Startup hash migration failed: {}", e.getMessage(), e);
             }
-        }, "hash-migration-startup").start();
+        });
     }
 }
