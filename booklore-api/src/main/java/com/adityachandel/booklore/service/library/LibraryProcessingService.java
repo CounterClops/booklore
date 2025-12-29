@@ -10,6 +10,7 @@ import com.adityachandel.booklore.model.websocket.Topic;
 import com.adityachandel.booklore.repository.BookAdditionalFileRepository;
 import com.adityachandel.booklore.repository.LibraryRepository;
 import com.adityachandel.booklore.service.NotificationService;
+import com.adityachandel.booklore.service.file.FileFingerprint;
 import com.adityachandel.booklore.task.options.RescanLibraryContext;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
@@ -20,6 +21,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -87,10 +89,48 @@ public class LibraryProcessingService {
         Set<Path> currentFullPaths = libraryFiles.stream()
                 .map(LibraryFile::getFullPath)
                 .collect(Collectors.toSet());
+        
+        // Build hash map of current files for moved file detection
+        Map<String, Path> hashToPathMap = new HashMap<>();
+        for (LibraryFile file : libraryFiles) {
+            try {
+                if (Files.exists(file.getFullPath())) {
+                    String hash = FileFingerprint.generateHash(file.getFullPath());
+                    if (hash != null && !hash.isEmpty()) {
+                        hashToPathMap.put(hash, file.getFullPath());
+                    }
+                }
+            } catch (Exception e) {
+                log.debug("Could not calculate hash for '{}': {}", file.getFullPath(), e.getMessage());
+            }
+        }
 
         return libraryEntity.getBookEntities().stream()
                 .filter(book -> (book.getDeleted() == null || !book.getDeleted()))
-                .filter(book -> !currentFullPaths.contains(book.getFullFilePath()))
+                .filter(book -> {
+                    // Don't mark as deleted if path exists
+                    if (currentFullPaths.contains(book.getFullFilePath())) {
+                        return false;
+                    }
+                    
+                    // Don't mark as deleted if hash exists elsewhere (file was moved/renamed)
+                    String currentHash = book.getCurrentHash();
+                    if (currentHash != null && !currentHash.isEmpty() && hashToPathMap.containsKey(currentHash)) {
+                        log.debug("Book {} not marked as deleted - hash '{}' found at new path: {}", 
+                                book.getId(), currentHash, hashToPathMap.get(currentHash));
+                        return false;
+                    }
+                    
+                    String initialHash = book.getInitialHash();
+                    if (initialHash != null && !initialHash.isEmpty() && hashToPathMap.containsKey(initialHash)) {
+                        log.debug("Book {} not marked as deleted - hash '{}' found at new path: {}", 
+                                book.getId(), initialHash, hashToPathMap.get(initialHash));
+                        return false;
+                    }
+                    
+                    // File truly deleted - not found by path or hash
+                    return true;
+                })
                 .map(BookEntity::getId)
                 .collect(Collectors.toList());
     }
@@ -105,9 +145,43 @@ public class LibraryProcessingService {
                 .collect(Collectors.toSet());
 
         existingFullPaths.addAll(additionalFilePaths);
+        
+        // Build set of existing hashes to detect moved files
+        Set<String> existingHashes = new HashSet<>();
+        for (BookEntity book : libraryEntity.getBookEntities()) {
+            if (book.getCurrentHash() != null && !book.getCurrentHash().isEmpty()) {
+                existingHashes.add(book.getCurrentHash());
+            }
+            if (book.getInitialHash() != null && !book.getInitialHash().isEmpty()) {
+                existingHashes.add(book.getInitialHash());
+            }
+        }
 
         return libraryFiles.stream()
-                .filter(file -> !existingFullPaths.contains(file.getFullPath()))
+                .filter(file -> {
+                    // Already exists at this exact path
+                    if (existingFullPaths.contains(file.getFullPath())) {
+                        return false;
+                    }
+                    
+                    // Check if this file's hash already exists (moved file)
+                    // If it does, still process it so AbstractFileProcessor.processFile() can relink it
+                    try {
+                        if (Files.exists(file.getFullPath())) {
+                            String hash = FileFingerprint.generateHash(file.getFullPath());
+                            if (hash != null && !hash.isEmpty() && existingHashes.contains(hash)) {
+                                log.debug("File '{}' has matching hash '{}' - will be relinked", 
+                                        file.getFileName(), hash);
+                                return true; // Include for processing so it gets relinked
+                            }
+                        }
+                    } catch (Exception e) {
+                        log.debug("Could not calculate hash for '{}': {}", file.getFullPath(), e.getMessage());
+                    }
+                    
+                    // Truly new file
+                    return true;
+                })
                 .collect(Collectors.toList());
     }
 

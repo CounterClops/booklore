@@ -18,6 +18,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -61,5 +62,40 @@ public class BookFileTransactionalHandler {
 
         notificationService.sendMessageToPermissions(Topic.LOG, LogNotification.info("Finished processing file: " + filePath), Set.of(ADMIN, MANAGE_LIBRARY));
         log.info("[CREATE] Completed processing for file '{}'", filePath);
+    }
+
+    @Transactional()
+    public void handleFileMove(long libraryId, Path oldPath, Path newPath, String hash) {
+        try {
+            LibraryEntity library = libraryRepository.findById(libraryId)
+                    .orElseThrow(() -> ApiError.LIBRARY_NOT_FOUND.createException(libraryId));
+            
+            String libPath = bookFilePersistenceService.findMatchingLibraryPath(library, oldPath);
+            LibraryPathEntity libPathEntity = bookFilePersistenceService.getLibraryPathEntityForFile(library, libPath);
+            
+            Path relPath = Paths.get(libPathEntity.getPath()).relativize(oldPath);
+            String fileName = relPath.getFileName().toString();
+            String fileSubPath = Optional.ofNullable(relPath.getParent()).map(Path::toString).orElse("");
+            
+            Optional<BookEntity> bookOpt = bookFilePersistenceService.findByLibraryPathSubPathAndFileName(
+                    libPathEntity.getId(), fileSubPath, fileName);
+            
+            if (bookOpt.isPresent()) {
+                BookEntity book = bookOpt.get();
+                bookFilePersistenceService.updatePathIfChanged(book, library, newPath, hash);
+                log.info("[FILE_MOVE] Book {} path updated from '{}' to '{}'", book.getId(), oldPath, newPath);
+            } else {
+                log.warn("[FILE_MOVE] Book not found for old path '{}', processing as new file", oldPath);
+                handleNewBookFile(libraryId, newPath);
+            }
+        } catch (Exception e) {
+            log.error("[FILE_MOVE] Error handling file move from '{}' to '{}': {}", oldPath, newPath, e.getMessage(), e);
+            // Fallback: process as new file
+            try {
+                handleNewBookFile(libraryId, newPath);
+            } catch (Exception ex) {
+                log.error("[FILE_MOVE] Fallback failed for '{}': {}", newPath, ex.getMessage());
+            }
+        }
     }
 }

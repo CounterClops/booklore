@@ -102,6 +102,8 @@ public class FileMoveService {
             fileMoveHelper.commitMove(tempPath, newFilePath);
             tempPath = null;
             
+            updateBookHash(context.bookEntity, newFilePath);
+            
             cleanupOldDirectory(context.bookEntity, currentFilePath);
             notifyBookUpdate(bookId);
 
@@ -206,6 +208,8 @@ public class FileMoveService {
             fileMoveHelper.moveFile(currentFilePath, expectedFilePath);
             fileMoveHelper.deleteEmptyParentDirsUpToLibraryFolders(currentFilePath.getParent(), Set.of(libraryRoot));
 
+            updateBookHash(bookEntity, expectedFilePath);
+
             return buildSuccessfulMoveResult(expectedFilePath, bookEntity.getLibraryPath());
             
         } catch (Exception e) {
@@ -240,5 +244,20 @@ public class FileMoveService {
                 .newFileName(newFileName)
                 .newFileSubPath(newFileSubPath)
                 .build();
+    }
+
+    private void updateBookHash(BookEntity book, Path newFilePath) {
+        try {
+            String newHash = FileFingerprint.generateHash(newFilePath);
+            if (newHash != null && !newHash.isEmpty()) {
+                if (book.getInitialHash() == null || book.getInitialHash().isEmpty()) {
+                    book.setInitialHash(newHash);
+                }
+                book.setCurrentHash(newHash);
+                log.debug("Updated hash for book {} after file move: {}", book.getId(), newHash);
+            }
+        } catch (Exception e) {
+            log.warn("Failed to update hash for book {} after file move: {}", book.getId(), e.getMessage());
+        }
     }
 }

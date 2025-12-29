@@ -63,4 +63,8 @@ public class NotificationService {
             log.error("Error sending message to users with permissions {}: {}", permissionSet, e.getMessage(), e);
         }
     }
+
+    public void sendToAdmins(Topic topic, Object message) {
+        sendMessageToPermissions(topic, message, Set.of(PermissionType.ADMIN));
+    }
 }

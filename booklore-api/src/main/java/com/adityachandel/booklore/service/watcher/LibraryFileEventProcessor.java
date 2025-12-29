@@ -1,6 +1,7 @@
 package com.adityachandel.booklore.service.watcher;
 
 import com.adityachandel.booklore.exception.ApiError;
+import com.adityachandel.booklore.model.entity.BookEntity;
 import com.adityachandel.booklore.model.entity.LibraryEntity;
 import com.adityachandel.booklore.model.entity.LibraryPathEntity;
 import com.adityachandel.booklore.model.enums.BookFileExtension;
@@ -18,6 +19,7 @@ import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.nio.file.*;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.*;
@@ -28,6 +30,7 @@ import java.util.concurrent.*;
 public class LibraryFileEventProcessor {
 
     private static final long DEBOUNCE_MS = 500L;
+    private static final long RENAME_DETECTION_WINDOW_MS = 200L;
 
     private final BlockingQueue<FileEvent> eventQueue = new LinkedBlockingQueue<>();
     private final LibraryRepository libraryRepository;
@@ -36,7 +39,8 @@ public class LibraryFileEventProcessor {
     private final NotificationService notificationService;
 
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
-    private final ConcurrentMap<Path, ScheduledFuture<?>> pendingDeletes = new ConcurrentHashMap<>();
+    private final ConcurrentMap<Path, PendingDelete> pendingDeletes = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, RecentCreate> recentCreates = new ConcurrentHashMap<>();
 
     @PostConstruct
     public void init() {
@@ -59,27 +63,150 @@ public class LibraryFileEventProcessor {
         Path path = Paths.get(filePath).toAbsolutePath().normalize();
 
         if (eventKind == StandardWatchEventKinds.ENTRY_DELETE) {
-            // Schedule DELETE after debounce
-            ScheduledFuture<?> existing = pendingDeletes.put(path, scheduler.schedule(() -> {
-                eventQueue.offer(new FileEvent(eventKind, libraryId, libraryPath, filePath));
-                pendingDeletes.remove(path);
-            }, DEBOUNCE_MS, TimeUnit.MILLISECONDS));
-
-            if (existing != null) existing.cancel(false);
+            handleDeleteEvent(path, eventKind, libraryId, libraryPath, filePath);
         } else if (eventKind == StandardWatchEventKinds.ENTRY_CREATE) {
-            // If a DELETE is pending for this path, cancel both DELETE and CREATE
-            ScheduledFuture<?> pendingDelete = pendingDeletes.remove(path);
-            if (pendingDelete != null) {
-                pendingDelete.cancel(false);
-                log.debug("[DEBOUNCE] CREATE ignored because pending DELETE exists for '{}'", path);
-                return;
-            }
-            // Otherwise process CREATE immediately
-            eventQueue.offer(new FileEvent(eventKind, libraryId, libraryPath, filePath));
+            handleCreateEvent(path, eventKind, libraryId, libraryPath, filePath);
         } else {
             // Other events
             eventQueue.offer(new FileEvent(eventKind, libraryId, libraryPath, filePath));
         }
+    }
+
+    private void handleDeleteEvent(Path path, WatchEvent.Kind<?> eventKind, long libraryId, String libraryPath, String filePath) {
+        String fileName = path.getFileName().toString();
+        
+        // Only check for renames if this is a book file
+        if (!isBookFile(fileName)) {
+            scheduleDelete(path, eventKind, libraryId, libraryPath, filePath, null);
+            return;
+        }
+        
+        // Get the book's hash from database before it's deleted
+        String hash = getBookHashForPath(libraryId, path);
+        
+        // Check if a CREATE event with matching hash arrived recently (within last 200ms)
+        if (hash != null && !hash.isEmpty()) {
+            Optional<RecentCreate> matchingCreate = findRecentCreateByHash(hash);
+            if (matchingCreate.isPresent()) {
+                // This is a RENAME! Handle as file move immediately
+                RecentCreate createEvent = matchingCreate.get();
+                recentCreates.remove(createEvent.hash());
+                log.info("[RENAME_DETECTED] File renamed from '{}' to '{}' via hash '{}'", 
+                        path, createEvent.path(), hash);
+                handleFileMove(libraryId, path, createEvent.path(), hash);
+                return;
+            }
+        }
+        
+        // No matching CREATE found - schedule DELETE with debounce
+        scheduleDelete(path, eventKind, libraryId, libraryPath, filePath, hash);
+    }
+
+    private void handleCreateEvent(Path path, WatchEvent.Kind<?> eventKind, long libraryId, String libraryPath, String filePath) {
+        // If a DELETE is pending for this exact path, it's a file modification (not a rename)
+        PendingDelete pendingDelete = pendingDeletes.remove(path);
+        if (pendingDelete != null) {
+            pendingDelete.future().cancel(false);
+            log.debug("[DEBOUNCE] CREATE ignored because pending DELETE exists for same path '{}'", path);
+            return;
+        }
+        
+        // Check if any pending DELETE has matching hash (this would be second half of rename)
+        String hash = calculateHashSafely(path);
+        if (hash != null && !hash.isEmpty() && isBookFile(path.getFileName().toString())) {
+            Optional<Map.Entry<Path, PendingDelete>> matchingDelete = findPendingDeleteByHash(hash);
+            if (matchingDelete.isPresent()) {
+                Path oldPath = matchingDelete.get().getKey();
+                PendingDelete pending = matchingDelete.get().getValue();
+                pendingDeletes.remove(oldPath);
+                pending.future().cancel(false);
+                log.info("[RENAME_DETECTED] File renamed from '{}' to '{}' via hash '{}'", oldPath, path, hash);
+                handleFileMove(libraryId, oldPath, path, hash);
+                return;
+            }
+            
+            // Store this CREATE in the cache for potential incoming DELETE
+            storeRecentCreate(path, hash);
+        }
+        
+        // Process CREATE normally
+        eventQueue.offer(new FileEvent(eventKind, libraryId, libraryPath, filePath));
+    }
+
+    private void scheduleDelete(Path path, WatchEvent.Kind<?> eventKind, long libraryId, String libraryPath, String filePath, String hash) {
+        ScheduledFuture<?> future = scheduler.schedule(() -> {
+            eventQueue.offer(new FileEvent(eventKind, libraryId, libraryPath, filePath));
+            pendingDeletes.remove(path);
+        }, DEBOUNCE_MS, TimeUnit.MILLISECONDS);
+        
+        PendingDelete existing = pendingDeletes.put(path, new PendingDelete(future, hash));
+        if (existing != null) {
+            existing.future().cancel(false);
+        }
+    }
+
+    private void storeRecentCreate(Path path, String hash) {
+        RecentCreate recentCreate = new RecentCreate(path, hash, System.currentTimeMillis());
+        recentCreates.put(hash, recentCreate);
+        
+        // Clean up after RENAME_DETECTION_WINDOW_MS
+        scheduler.schedule(() -> {
+            RecentCreate stored = recentCreates.get(hash);
+            if (stored != null && stored.timestamp() == recentCreate.timestamp()) {
+                recentCreates.remove(hash);
+            }
+        }, RENAME_DETECTION_WINDOW_MS, TimeUnit.MILLISECONDS);
+    }
+
+    private Optional<RecentCreate> findRecentCreateByHash(String hash) {
+        RecentCreate recent = recentCreates.get(hash);
+        if (recent != null && (System.currentTimeMillis() - recent.timestamp()) <= RENAME_DETECTION_WINDOW_MS) {
+            return Optional.of(recent);
+        }
+        return Optional.empty();
+    }
+
+    private Optional<Map.Entry<Path, PendingDelete>> findPendingDeleteByHash(String hash) {
+        return pendingDeletes.entrySet().stream()
+                .filter(entry -> hash.equals(entry.getValue().hash()))
+                .findFirst();
+    }
+
+    private String getBookHashForPath(long libraryId, Path path) {
+        try {
+            LibraryEntity library = libraryRepository.findById(libraryId).orElse(null);
+            if (library == null) return null;
+            
+            String libPath = bookFilePersistenceService.findMatchingLibraryPath(library, path);
+            LibraryPathEntity libPathEntity = bookFilePersistenceService.getLibraryPathEntityForFile(library, libPath);
+            
+            Path relPath = Paths.get(libPathEntity.getPath()).relativize(path);
+            String fileName = relPath.getFileName().toString();
+            String fileSubPath = Optional.ofNullable(relPath.getParent()).map(Path::toString).orElse("");
+            
+            Optional<BookEntity> bookOpt = bookFilePersistenceService.findByLibraryPathSubPathAndFileName(
+                    libPathEntity.getId(), fileSubPath, fileName);
+            
+            return bookOpt.map(BookEntity::getCurrentHash).orElse(null);
+        } catch (Exception e) {
+            log.debug("Could not retrieve hash for path '{}': {}", path, e.getMessage());
+            return null;
+        }
+    }
+
+    private String calculateHashSafely(Path path) {
+        try {
+            if (Files.exists(path)) {
+                return FileFingerprint.generateHash(path);
+            }
+        } catch (Exception e) {
+            log.debug("Could not calculate hash for path '{}': {}", path, e.getMessage());
+        }
+        return null;
+    }
+
+    private void handleFileMove(long libraryId, Path oldPath, Path newPath, String hash) {
+        bookFileTransactionalHandler.handleFileMove(libraryId, oldPath, newPath, hash);
     }
 
     private void handleEvent(FileEvent event) {
@@ -196,5 +323,11 @@ public class LibraryFileEventProcessor {
     }
 
     public record FileEvent(WatchEvent.Kind<?> eventKind, long libraryId, String libraryPath, String filePath) {
+    }
+
+    private record PendingDelete(ScheduledFuture<?> future, String hash) {
+    }
+
+    private record RecentCreate(Path path, String hash, long timestamp) {
     }
 }

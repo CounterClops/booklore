@@ -7,16 +7,17 @@ import com.adityachandel.booklore.model.entity.LibraryEntity;
 import com.adityachandel.booklore.model.websocket.Topic;
 import com.adityachandel.booklore.repository.BookRepository;
 import com.adityachandel.booklore.service.NotificationService;
+import com.adityachandel.booklore.service.file.FileFingerprint;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
-import java.util.List;
-import java.util.Set;
+import java.util.*;
 import java.util.stream.Collectors;
 
 @Service
@@ -36,10 +37,45 @@ public class BookRestorationService {
         Set<Path> currentPaths = libraryFiles.stream()
                 .map(LibraryFile::getFullPath)
                 .collect(Collectors.toSet());
+        
+        // Build hash map for moved file detection
+        Map<String, Path> hashToPathMap = new HashMap<>();
+        for (LibraryFile file : libraryFiles) {
+            try {
+                if (Files.exists(file.getFullPath())) {
+                    String hash = FileFingerprint.generateHash(file.getFullPath());
+                    if (hash != null && !hash.isEmpty()) {
+                        hashToPathMap.put(hash, file.getFullPath());
+                    }
+                }
+            } catch (Exception e) {
+                log.debug("Could not calculate hash for '{}': {}", file.getFullPath(), e.getMessage());
+            }
+        }
 
         List<BookEntity> toRestore = libraryEntity.getBookEntities().stream()
                 .filter(book -> Boolean.TRUE.equals(book.getDeleted()))
-                .filter(book -> currentPaths.contains(book.getFullFilePath()))
+                .filter(book -> {
+                    // Restore if exact path match
+                    if (currentPaths.contains(book.getFullFilePath())) {
+                        return true;
+                    }
+                    
+                    // Restore if hash matches (file was moved/renamed)
+                    String currentHash = book.getCurrentHash();
+                    if (currentHash != null && !currentHash.isEmpty() && hashToPathMap.containsKey(currentHash)) {
+                        log.debug("Book {} will be restored via hash match '{}'", book.getId(), currentHash);
+                        return true;
+                    }
+                    
+                    String initialHash = book.getInitialHash();
+                    if (initialHash != null && !initialHash.isEmpty() && hashToPathMap.containsKey(initialHash)) {
+                        log.debug("Book {} will be restored via hash match '{}'", book.getId(), initialHash);
+                        return true;
+                    }
+                    
+                    return false;
+                })
                 .collect(Collectors.toList());
 
         if (toRestore.isEmpty()) return;
