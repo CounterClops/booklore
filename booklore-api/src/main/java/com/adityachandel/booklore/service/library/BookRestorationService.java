@@ -39,7 +39,7 @@ public class BookRestorationService {
 
         List<BookEntity> toRestore = libraryEntity.getBookEntities().stream()
                 .filter(book -> Boolean.TRUE.equals(book.getDeleted()))
-                .filter(book -> isBookFoundInCurrentFiles(book, currentPaths))
+                .filter(book -> canLocateBookInFiles(book, currentPaths))
                 .collect(Collectors.toList());
 
         if (toRestore.isEmpty()) return;
@@ -59,8 +59,9 @@ public class BookRestorationService {
         log.info("Restored {} books in library: {}", restoredIds.size(), libraryEntity.getName());
     }
 
-    private boolean isBookFoundInCurrentFiles(BookEntity book, Set<Path> currentPaths) {
+    private boolean canLocateBookInFiles(BookEntity book, Set<Path> currentPaths) {
         if (book == null || currentPaths == null) {
+            log.debug("Cannot locate book - null parameters provided");
             return false;
         }
         
@@ -71,25 +72,28 @@ public class BookRestorationService {
         
         String currentHash = book.getCurrentHash();
         if (currentHash != null && !currentHash.isEmpty() && 
-            bookHashExistsInPaths(currentHash, currentPaths, book.getId())) {
+            findBookByHashInPaths(currentHash, currentPaths, book.getId())) {
             return true;
         }
         
         String initialHash = book.getInitialHash();
         if (initialHash != null && !initialHash.isEmpty() && 
             !initialHash.equals(currentHash)) {
-            return bookHashExistsInPaths(initialHash, currentPaths, book.getId());
+            if (findBookByHashInPaths(initialHash, currentPaths, book.getId())) {
+                return true;
+            }
         }
         
+        log.debug("Book {} not found - no path or hash match in current files", book.getId());
         return false;
     }
 
-    private boolean bookHashExistsInPaths(String hash, Set<Path> paths, Long bookId) {
+    private boolean findBookByHashInPaths(String hash, Set<Path> paths, Long bookId) {
         if (hash == null || hash.isEmpty() || paths == null) {
             return false;
         }
         
-        boolean exists = paths.stream().anyMatch(path -> pathMatchesHash(path, hash));
+        boolean exists = paths.stream().anyMatch(path -> verifyFileMatchesHash(path, hash));
         
         if (exists) {
             log.debug("Book {} will be restored via hash match '{}'", bookId, hash);
@@ -98,7 +102,7 @@ public class BookRestorationService {
         return exists;
     }
 
-    private boolean pathMatchesHash(Path path, String expectedHash) {
+    private boolean verifyFileMatchesHash(Path path, String expectedHash) {
         if (path == null || expectedHash == null) {
             return false;
         }
@@ -108,9 +112,15 @@ public class BookRestorationService {
                 return false;
             }
             String fileHash = FileFingerprint.generateHash(path);
-            return expectedHash.equals(fileHash);
+            boolean matches = expectedHash.equals(fileHash);
+            
+            if (!matches) {
+                log.trace("Hash mismatch for '{}': expected '{}', got '{}'", path, expectedHash, fileHash);
+            }
+            
+            return matches;
         } catch (Exception e) {
-            log.trace("Could not check hash for '{}': {}", path, e.getMessage());
+            log.debug("Error checking hash for '{}': {}", path, e.getMessage());
             return false;
         }
     }
