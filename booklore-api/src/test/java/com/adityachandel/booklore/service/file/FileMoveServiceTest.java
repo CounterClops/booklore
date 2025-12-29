@@ -10,7 +10,9 @@ import com.adityachandel.booklore.repository.BookRepository;
 import com.adityachandel.booklore.repository.LibraryRepository;
 import com.adityachandel.booklore.service.NotificationService;
 import com.adityachandel.booklore.service.monitoring.MonitoringRegistrationService;
+import com.adityachandel.booklore.service.watcher.SystemOperationContext;
 import jakarta.persistence.EntityManager;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -21,11 +23,12 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anySet;
 import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -58,6 +61,8 @@ class FileMoveServiceTest {
 
     @BeforeEach
     void setUp() throws Exception {
+        SystemOperationContext.clearAll();
+        
         LibraryEntity library = new LibraryEntity();
         library.setId(42L);
 
@@ -80,6 +85,11 @@ class FileMoveServiceTest {
         when(fileMoveHelper.extractSubPath(expectedFilePath, libraryPath)).thenReturn(bookEntity.getFileSubPath());
         doNothing().when(fileMoveHelper).moveFile(any(Path.class), any(Path.class));
         doNothing().when(fileMoveHelper).deleteEmptyParentDirsUpToLibraryFolders(any(Path.class), anySet());
+    }
+
+    @AfterEach
+    void tearDown() {
+        SystemOperationContext.clearAll();
     }
 
     @Test
@@ -106,4 +116,24 @@ class FileMoveServiceTest {
         verify(fileMoveHelper, never()).unregisterLibrary(anyLong());
         verify(fileMoveHelper, never()).registerLibraryPaths(anyLong(), any(Path.class));
     }
+
+    @Test
+    void moveSingleFile_marksSourceAndDestinationPathsAsSystemOperation() {
+        when(monitoringRegistrationService.isLibraryMonitored(42L)).thenReturn(false);
+        
+        FileMoveResult result = fileMoveService.moveSingleFile(bookEntity);
+
+        assertTrue(result.isMoved());
+    }
+
+    @Test
+    void moveSingleFile_clearsContextInFinallyBlock() {
+        when(monitoringRegistrationService.isLibraryMonitored(42L)).thenReturn(false);
+
+        fileMoveService.moveSingleFile(bookEntity);
+
+        assertEquals(0, SystemOperationContext.getOperationCount(), 
+                "Context should be cleared after method completes");
+    }
 }
+

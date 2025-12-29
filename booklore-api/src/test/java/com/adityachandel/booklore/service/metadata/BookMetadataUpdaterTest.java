@@ -7,14 +7,20 @@ import com.adityachandel.booklore.model.dto.settings.AppSettings;
 import com.adityachandel.booklore.model.dto.settings.MetadataPersistenceSettings;
 import com.adityachandel.booklore.model.entity.BookEntity;
 import com.adityachandel.booklore.model.entity.BookMetadataEntity;
+import com.adityachandel.booklore.model.entity.LibraryEntity;
+import com.adityachandel.booklore.model.entity.LibraryPathEntity;
 import com.adityachandel.booklore.model.entity.MoodEntity;
 import com.adityachandel.booklore.model.entity.TagEntity;
+import com.adityachandel.booklore.model.enums.BookFileType;
 import com.adityachandel.booklore.model.enums.MetadataReplaceMode;
 import com.adityachandel.booklore.repository.*;
 import com.adityachandel.booklore.service.appsettings.AppSettingService;
 import com.adityachandel.booklore.service.file.FileMoveService;
+import com.adityachandel.booklore.service.metadata.writer.MetadataWriter;
 import com.adityachandel.booklore.service.metadata.writer.MetadataWriterFactory;
+import com.adityachandel.booklore.service.watcher.SystemOperationContext;
 import com.adityachandel.booklore.util.FileService;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -22,12 +28,15 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Optional;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -50,9 +59,16 @@ class BookMetadataUpdaterTest {
 
     @BeforeEach
     void setUp() {
+        SystemOperationContext.clearAll();
+        
         AppSettings appSettings = new AppSettings();
         appSettings.setMetadataPersistenceSettings(new MetadataPersistenceSettings());
         when(appSettingService.getAppSettings()).thenReturn(appSettings);
+    }
+
+    @AfterEach
+    void tearDown() {
+        SystemOperationContext.clearAll();
     }
 
     @Test
@@ -288,5 +304,124 @@ class BookMetadataUpdaterTest {
 
         assertEquals("New Title", bookEntity.getMetadata().getTitle());
         assertTrue(bookEntity.getMetadata().getTitleLocked());
+    }
+
+    @Test
+    void setBookMetadata_whenNoFileOperations_doesNotCallGetFullFilePath() {
+        BookEntity bookEntity = new BookEntity();
+        bookEntity.setId(1L);
+
+        BookMetadataEntity metadataEntity = new BookMetadataEntity();
+        metadataEntity.setTitle("Old Title");
+        bookEntity.setMetadata(metadataEntity);
+
+        BookMetadata newMetadata = new BookMetadata();
+        newMetadata.setTitle("New Title");
+
+        MetadataUpdateWrapper wrapper = MetadataUpdateWrapper.builder()
+                .metadata(newMetadata)
+                .build();
+
+        MetadataUpdateContext context = MetadataUpdateContext.builder()
+                .bookEntity(bookEntity)
+                .metadataUpdateWrapper(wrapper)
+                .replaceMode(MetadataReplaceMode.REPLACE_ALL)
+                .build();
+
+        AppSettings appSettings = new AppSettings();
+        MetadataPersistenceSettings settings = new MetadataPersistenceSettings();
+        settings.setSaveToOriginalFile(false);
+        settings.setMoveFilesToLibraryPattern(false);
+        appSettings.setMetadataPersistenceSettings(settings);
+        when(appSettingService.getAppSettings()).thenReturn(appSettings);
+
+        assertDoesNotThrow(() -> bookMetadataUpdater.setBookMetadata(context));
+        assertEquals("New Title", bookEntity.getMetadata().getTitle());
+    }
+
+    @Test
+    void setBookMetadata_whenWritingToFile_marksSystemOperation() {
+        BookEntity bookEntity = createBookEntityWithFilePath();
+        BookMetadataEntity metadataEntity = new BookMetadataEntity();
+        metadataEntity.setTitle("Old Title");
+        bookEntity.setMetadata(metadataEntity);
+        bookEntity.setBookType(BookFileType.EPUB);
+
+        BookMetadata newMetadata = new BookMetadata();
+        newMetadata.setTitle("New Title");
+
+        MetadataUpdateWrapper wrapper = MetadataUpdateWrapper.builder()
+                .metadata(newMetadata)
+                .build();
+
+        MetadataUpdateContext context = MetadataUpdateContext.builder()
+                .bookEntity(bookEntity)
+                .metadataUpdateWrapper(wrapper)
+                .replaceMode(MetadataReplaceMode.REPLACE_ALL)
+                .build();
+
+        AppSettings appSettings = new AppSettings();
+        MetadataPersistenceSettings settings = new MetadataPersistenceSettings();
+        settings.setSaveToOriginalFile(true);
+        settings.setMoveFilesToLibraryPattern(false);
+        appSettings.setMetadataPersistenceSettings(settings);
+        when(appSettingService.getAppSettings()).thenReturn(appSettings);
+
+        MetadataWriter mockWriter = org.mockito.Mockito.mock(MetadataWriter.class);
+        when(metadataWriterFactory.getWriter(BookFileType.EPUB)).thenReturn(Optional.of(mockWriter));
+
+        Path filePath = bookEntity.getFullFilePath();
+
+        bookMetadataUpdater.setBookMetadata(context);
+
+        assertFalse(SystemOperationContext.isSystemOperation(filePath), 
+                "Context should be cleared after method completes");
+    }
+
+    @Test
+    void setBookMetadata_clearsContextInFinallyBlock() {
+        BookEntity bookEntity = new BookEntity();
+        bookEntity.setId(1L);
+
+        BookMetadataEntity metadataEntity = new BookMetadataEntity();
+        metadataEntity.setTitle("Old Title");
+        bookEntity.setMetadata(metadataEntity);
+
+        BookMetadata newMetadata = new BookMetadata();
+        newMetadata.setTitle("New Title");
+
+        MetadataUpdateWrapper wrapper = MetadataUpdateWrapper.builder()
+                .metadata(newMetadata)
+                .build();
+
+        MetadataUpdateContext context = MetadataUpdateContext.builder()
+                .bookEntity(bookEntity)
+                .metadataUpdateWrapper(wrapper)
+                .replaceMode(MetadataReplaceMode.REPLACE_ALL)
+                .build();
+
+        bookMetadataUpdater.setBookMetadata(context);
+
+        assertEquals(0, SystemOperationContext.getOperationCount(), 
+                "Context should be cleared after method completes");
+    }
+
+    private BookEntity createBookEntityWithFilePath() {
+        LibraryEntity library = new LibraryEntity();
+        library.setId(1L);
+
+        LibraryPathEntity libraryPath = new LibraryPathEntity();
+        libraryPath.setId(1L);
+        libraryPath.setPath("/library/root");
+        libraryPath.setLibrary(library);
+
+        BookEntity bookEntity = new BookEntity();
+        bookEntity.setId(1L);
+        bookEntity.setLibrary(library);
+        bookEntity.setLibraryPath(libraryPath);
+        bookEntity.setFileSubPath("Fiction");
+        bookEntity.setFileName("test.epub");
+
+        return bookEntity;
     }
 }
