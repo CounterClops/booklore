@@ -202,13 +202,13 @@ public class HashMigrationService {
     public HashMigrationStats getMigrationStats() {
         long total = bookRepository.count();
         long missing = bookRepository.countBooksWithMissingHashes();
-        long brokenPaths = bookRepository.countBooksWithBrokenPaths();
+        long softDeleted = bookRepository.countSoftDeletedBooks();
         
         return new HashMigrationStats(
                 total,
                 total - missing,
                 missing,
-                brokenPaths,
+                softDeleted,
                 migrationInProgress.get(),
                 startupMigrationCompleted.get()
         );
@@ -284,7 +284,7 @@ public class HashMigrationService {
             long totalBooks,
             long booksWithHashes,
             long booksMissingHashes,
-            long booksWithBrokenPaths,
+            long booksSoftDeleted,
             boolean migrationInProgress,
             boolean startupMigrationCompleted
     ) {}

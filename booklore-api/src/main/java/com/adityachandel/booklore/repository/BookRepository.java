@@ -155,6 +155,6 @@ public interface BookRepository extends JpaRepository<BookEntity, Long>, JpaSpec
     @Query("SELECT COUNT(b) FROM BookEntity b WHERE (b.currentHash IS NULL OR b.currentHash = '') AND (b.deleted IS NULL OR b.deleted = false)")
     long countBooksWithMissingHashes();
 
-    @Query("SELECT COUNT(b) FROM BookEntity b WHERE (b.deleted IS NULL OR b.deleted = false)")
-    long countBooksWithBrokenPaths();
+    @Query("SELECT COUNT(b) FROM BookEntity b WHERE b.deleted = true")
+    long countSoftDeletedBooks();
 }

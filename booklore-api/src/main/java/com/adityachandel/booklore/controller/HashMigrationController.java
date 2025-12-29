@@ -22,7 +22,7 @@ public class HashMigrationController {
 
     @Operation(
             summary = "Get hash migration statistics",
-            description = "Returns statistics about books with/without hashes and broken paths"
+            description = "Returns statistics about books with/without hashes and soft-deleted books pending cleanup"
     )
     @ApiResponse(responseCode = "200", description = "Statistics retrieved successfully")
     @GetMapping("/stats")
