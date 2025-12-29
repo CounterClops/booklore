@@ -60,16 +60,24 @@ public class BookRestorationService {
     }
 
     private boolean isBookFoundInCurrentFiles(BookEntity book, Set<Path> currentPaths) {
-        if (currentPaths.contains(book.getFullFilePath())) {
+        if (book == null || currentPaths == null) {
+            return false;
+        }
+        
+        Path bookPath = book.getFullFilePath();
+        if (bookPath != null && currentPaths.contains(bookPath)) {
             return true;
         }
         
-        if (bookHashExistsInPaths(book.getCurrentHash(), currentPaths, book.getId())) {
+        String currentHash = book.getCurrentHash();
+        if (currentHash != null && !currentHash.isEmpty() && 
+            bookHashExistsInPaths(currentHash, currentPaths, book.getId())) {
             return true;
         }
         
         String initialHash = book.getInitialHash();
-        if (initialHash != null && !initialHash.equals(book.getCurrentHash())) {
+        if (initialHash != null && !initialHash.isEmpty() && 
+            !initialHash.equals(currentHash)) {
             return bookHashExistsInPaths(initialHash, currentPaths, book.getId());
         }
         
@@ -77,7 +85,7 @@ public class BookRestorationService {
     }
 
     private boolean bookHashExistsInPaths(String hash, Set<Path> paths, Long bookId) {
-        if (hash == null || hash.isEmpty()) {
+        if (hash == null || hash.isEmpty() || paths == null) {
             return false;
         }
         
@@ -91,6 +99,10 @@ public class BookRestorationService {
     }
 
     private boolean pathMatchesHash(Path path, String expectedHash) {
+        if (path == null || expectedHash == null) {
+            return false;
+        }
+        
         try {
             if (!Files.exists(path)) {
                 return false;

@@ -67,7 +67,6 @@ public class LibraryFileEventProcessor {
         } else if (eventKind == StandardWatchEventKinds.ENTRY_CREATE) {
             handleCreateEvent(path, eventKind, libraryId, libraryPath, filePath);
         } else {
-            // Other events
             eventQueue.offer(new FileEvent(eventKind, libraryId, libraryPath, filePath));
         }
     }
@@ -75,20 +74,16 @@ public class LibraryFileEventProcessor {
     private void handleDeleteEvent(Path path, WatchEvent.Kind<?> eventKind, long libraryId, String libraryPath, String filePath) {
         String fileName = path.getFileName().toString();
         
-        // Only check for renames if this is a book file
         if (!isBookFile(fileName)) {
             scheduleDelete(path, eventKind, libraryId, libraryPath, filePath, null);
             return;
         }
         
-        // Get the book's hash from database before it's deleted
         String hash = getBookHashForPath(libraryId, path);
         
-        // Check if a CREATE event with matching hash arrived recently (within last 200ms)
         if (hash != null && !hash.isEmpty()) {
             Optional<RecentCreate> matchingCreate = findRecentCreateByHash(hash);
             if (matchingCreate.isPresent()) {
-                // This is a RENAME! Handle as file move immediately
                 RecentCreate createEvent = matchingCreate.get();
                 recentCreates.remove(createEvent.hash());
                 log.info("[RENAME_DETECTED] File renamed from '{}' to '{}' via hash '{}'", 
@@ -98,12 +93,10 @@ public class LibraryFileEventProcessor {
             }
         }
         
-        // No matching CREATE found - schedule DELETE with debounce
         scheduleDelete(path, eventKind, libraryId, libraryPath, filePath, hash);
     }
 
     private void handleCreateEvent(Path path, WatchEvent.Kind<?> eventKind, long libraryId, String libraryPath, String filePath) {
-        // If a DELETE is pending for this exact path, it's a file modification (not a rename)
         PendingDelete pendingDelete = pendingDeletes.remove(path);
         if (pendingDelete != null) {
             pendingDelete.future().cancel(false);
@@ -111,7 +104,6 @@ public class LibraryFileEventProcessor {
             return;
         }
         
-        // Check if any pending DELETE has matching hash (this would be second half of rename)
         String hash = calculateHashSafely(path);
         if (hash != null && !hash.isEmpty() && isBookFile(path.getFileName().toString())) {
             Optional<Map.Entry<Path, PendingDelete>> matchingDelete = findPendingDeleteByHash(hash);
@@ -125,11 +117,9 @@ public class LibraryFileEventProcessor {
                 return;
             }
             
-            // Store this CREATE in the cache for potential incoming DELETE
             storeRecentCreate(path, hash);
         }
         
-        // Process CREATE normally
         eventQueue.offer(new FileEvent(eventKind, libraryId, libraryPath, filePath));
     }
 
@@ -149,7 +139,6 @@ public class LibraryFileEventProcessor {
         RecentCreate recentCreate = new RecentCreate(path, hash, System.currentTimeMillis());
         recentCreates.put(hash, recentCreate);
         
-        // Clean up after RENAME_DETECTION_WINDOW_MS
         scheduler.schedule(() -> {
             RecentCreate stored = recentCreates.get(hash);
             if (stored != null && stored.timestamp() == recentCreate.timestamp()) {
