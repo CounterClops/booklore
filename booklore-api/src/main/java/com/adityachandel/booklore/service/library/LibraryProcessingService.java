@@ -86,7 +86,7 @@ public class LibraryProcessingService {
         processor.processLibraryFiles(libraryFiles, libraryEntity);
     }
 
-    protected static List<Long> detectDeletedBookIds(List<LibraryFile> libraryFiles, LibraryEntity libraryEntity) {
+    protected List<Long> detectDeletedBookIds(List<LibraryFile> libraryFiles, LibraryEntity libraryEntity) {
         Set<Path> currentFullPaths = libraryFiles.stream()
                 .map(LibraryFile::getFullPath)
                 .collect(Collectors.toSet());
@@ -98,7 +98,7 @@ public class LibraryProcessingService {
                 .collect(Collectors.toList());
     }
 
-    private static boolean isBookFoundInCurrentFiles(BookEntity book, Set<Path> currentPaths) {
+    private boolean isBookFoundInCurrentFiles(BookEntity book, Set<Path> currentPaths) {
         if (currentPaths.contains(book.getFullFilePath())) {
             return true;
         }
@@ -115,7 +115,7 @@ public class LibraryProcessingService {
         return false;
     }
 
-    private static boolean bookHashExistsInPaths(String hash, Set<Path> paths, Long bookId) {
+    private boolean bookHashExistsInPaths(String hash, Set<Path> paths, Long bookId) {
         if (hash == null || hash.isEmpty()) {
             return false;
         }
@@ -129,7 +129,7 @@ public class LibraryProcessingService {
         return exists;
     }
 
-    private static boolean pathMatchesHash(Path path, String expectedHash) {
+    private boolean pathMatchesHash(Path path, String expectedHash) {
         try {
             if (!Files.exists(path)) {
                 return false;
