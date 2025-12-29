@@ -152,44 +152,42 @@ public class LibraryProcessingService {
                 .collect(Collectors.toSet());
 
         existingFullPaths.addAll(additionalFilePaths);
-        
-        // Build set of existing hashes to detect moved files
-        Set<String> existingHashes = new HashSet<>();
-        for (BookEntity book : libraryEntity.getBookEntities()) {
-            if (book.getCurrentHash() != null && !book.getCurrentHash().isEmpty()) {
-                existingHashes.add(book.getCurrentHash());
-            }
-            if (book.getInitialHash() != null && !book.getInitialHash().isEmpty()) {
-                existingHashes.add(book.getInitialHash());
-            }
-        }
 
         return libraryFiles.stream()
                 .filter(file -> {
-                    // Already exists at this exact path
                     if (existingFullPaths.contains(file.getFullPath())) {
                         return false;
                     }
                     
-                    // Check if this file's hash already exists (moved file)
-                    // If it does, still process it so AbstractFileProcessor.processFile() can relink it
-                    try {
-                        if (Files.exists(file.getFullPath())) {
-                            String hash = FileFingerprint.generateHash(file.getFullPath());
-                            if (hash != null && !hash.isEmpty() && existingHashes.contains(hash)) {
-                                log.debug("File '{}' has matching hash '{}' - will be relinked", 
-                                        file.getFileName(), hash);
-                                return true; // Include for processing so it gets relinked
-                            }
-                        }
-                    } catch (Exception e) {
-                        log.debug("Could not calculate hash for '{}': {}", file.getFullPath(), e.getMessage());
+                    if (isFileHashKnown(file, libraryEntity)) {
+                        log.debug("File '{}' has known hash - will be relinked", file.getFileName());
+                        return true;
                     }
                     
-                    // Truly new file
                     return true;
                 })
                 .collect(Collectors.toList());
+    }
+
+    private boolean isFileHashKnown(LibraryFile file, LibraryEntity libraryEntity) {
+        try {
+            if (!Files.exists(file.getFullPath())) {
+                return false;
+            }
+            
+            String fileHash = FileFingerprint.generateHash(file.getFullPath());
+            if (fileHash == null || fileHash.isEmpty()) {
+                return false;
+            }
+            
+            return libraryEntity.getBookEntities().stream()
+                    .anyMatch(book -> fileHash.equals(book.getCurrentHash()) || 
+                                      fileHash.equals(book.getInitialHash()));
+                                      
+        } catch (Exception e) {
+            log.debug("Could not calculate hash for '{}': {}", file.getFullPath(), e.getMessage());
+            return false;
+        }
     }
 
     protected List<Long> detectDeletedAdditionalFiles(List<LibraryFile> libraryFiles, LibraryEntity libraryEntity) {
