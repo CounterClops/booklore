@@ -87,6 +87,11 @@ public class LibraryFileEventProcessor {
         String fileName = path.getFileName().toString();
         log.info("[PROCESS] '{}' event for '{}'", event.eventKind().name(), fileName);
 
+        if (SystemOperationContext.isSystemOperation(path)) {
+            log.debug("[SKIP] System operation in progress for: '{}'", path);
+            return;
+        }
+
         LibraryEntity library = libraryRepository.findById(event.libraryId())
                 .orElseThrow(() -> ApiError.LIBRARY_NOT_FOUND.createException(event.libraryId()));
 

@@ -18,6 +18,7 @@ import com.adityachandel.booklore.service.file.FileFingerprint;
 import com.adityachandel.booklore.service.appsettings.AppSettingService;
 import com.adityachandel.booklore.service.file.FileMoveService;
 import com.adityachandel.booklore.service.metadata.writer.MetadataWriterFactory;
+import com.adityachandel.booklore.service.watcher.SystemOperationContext;
 import com.adityachandel.booklore.util.FileService;
 import com.adityachandel.booklore.util.MetadataChangeDetector;
 import lombok.AllArgsConstructor;
@@ -30,6 +31,7 @@ import org.springframework.util.StringUtils;
 import java.io.File;
 import java.net.InetAddress;
 import java.net.URI;
+import java.nio.file.Path;
 import java.time.Instant;
 import java.util.*;
 import java.util.function.Consumer;
@@ -112,36 +114,96 @@ public class BookMetadataUpdater {
             log.warn("Failed to calculate metadata match score for book ID {}: {}", bookId, e.getMessage());
         }
 
+        try {
+            performFileSystemOperations(bookEntity, metadata, newMetadata, clearFlags, updateThumbnail, 
+                    writeToFile, hasValueChangesForFileWrite, thumbnailRequiresUpdate, settings, bookType);
+        } finally {
+            SystemOperationContext.clearThreadContext();
+        }
+    }
+
+    private void performFileSystemOperations(BookEntity bookEntity, BookMetadataEntity metadata, 
+            BookMetadata newMetadata, MetadataClearFlags clearFlags, boolean updateThumbnail,
+            boolean writeToFile, boolean hasValueChangesForFileWrite, boolean thumbnailRequiresUpdate,
+            MetadataPersistenceSettings settings, BookFileType bookType) {
+        
+        Long bookId = bookEntity.getId();
+        boolean needsFileOperations = (writeToFile && hasValueChangesForFileWrite) 
+                || thumbnailRequiresUpdate 
+                || settings.isMoveFilesToLibraryPattern();
+        
+        if (!needsFileOperations) {
+            return;
+        }
+        
+        Path currentFilePath = bookEntity.getFullFilePath();
+        
         if ((writeToFile && hasValueChangesForFileWrite) || thumbnailRequiresUpdate) {
-            metadataWriterFactory.getWriter(bookType).ifPresent(writer -> {
-                try {
-                    String thumbnailUrl = updateThumbnail ? newMetadata.getThumbnailUrl() : null;
-                    if ((StringUtils.hasText(thumbnailUrl) && isLocalOrPrivateUrl(thumbnailUrl) || Boolean.TRUE.equals(metadata.getCoverLocked()))) {
-                        log.debug("Blocked local/private thumbnail URL: {}", thumbnailUrl);
-                        thumbnailUrl = null;
-                    }
-                    File file = new File(bookEntity.getFullFilePath().toUri());
-                    writer.writeMetadataToFile(file, metadata, thumbnailUrl, clearFlags);
-                    String newHash = FileFingerprint.generateHash(bookEntity.getFullFilePath());
-                    bookEntity.setCurrentHash(newHash);
-                } catch (Exception e) {
-                    log.warn("Failed to write metadata for book ID {}: {}", bookId, e.getMessage());
-                }
-            });
+            SystemOperationContext.markSystemOperation(currentFilePath);
+            writeMetadataToFile(bookEntity, metadata, newMetadata, clearFlags, updateThumbnail, 
+                    thumbnailRequiresUpdate, bookType, currentFilePath);
         }
 
-        boolean moveFilesToLibraryPattern = settings.isMoveFilesToLibraryPattern();
-        if (moveFilesToLibraryPattern) {
+        if (settings.isMoveFilesToLibraryPattern()) {
+            moveFileIfNeeded(bookEntity, metadata, bookId, currentFilePath);
+        }
+    }
+
+    private void writeMetadataToFile(BookEntity bookEntity, BookMetadataEntity metadata, 
+            BookMetadata newMetadata, MetadataClearFlags clearFlags, boolean updateThumbnail,
+            boolean thumbnailRequiresUpdate, BookFileType bookType, Path filePath) {
+        
+        metadataWriterFactory.getWriter(bookType).ifPresent(writer -> {
             try {
-                BookEntity book = metadata.getBook();
-                FileMoveResult result = fileMoveService.moveSingleFile(book);
-                if (result.isMoved()) {
-                    book.setFileName(result.getNewFileName());
-                    book.setFileSubPath(result.getNewFileSubPath());
-                }
+                String thumbnailUrl = determineThumbnailUrl(newMetadata, metadata, updateThumbnail, thumbnailRequiresUpdate);
+                File file = new File(filePath.toUri());
+                writer.writeMetadataToFile(file, metadata, thumbnailUrl, clearFlags);
+                
+                String newHash = FileFingerprint.generateHash(filePath);
+                bookEntity.setCurrentHash(newHash);
             } catch (Exception e) {
-                log.warn("Failed to move files for book ID {} after metadata update: {}", bookId, e.getMessage());
+                log.warn("Failed to write metadata for book ID {}: {}", bookEntity.getId(), e.getMessage());
             }
+        });
+    }
+
+    private String determineThumbnailUrl(BookMetadata newMetadata, BookMetadataEntity metadata, 
+            boolean updateThumbnail, boolean thumbnailRequiresUpdate) {
+        if (!updateThumbnail || !thumbnailRequiresUpdate) {
+            return null;
+        }
+        
+        String thumbnailUrl = newMetadata.getThumbnailUrl();
+        if (StringUtils.hasText(thumbnailUrl) && isLocalOrPrivateUrl(thumbnailUrl)) {
+            log.debug("Blocked local/private thumbnail URL: {}", thumbnailUrl);
+            return null;
+        }
+        
+        if (Boolean.TRUE.equals(metadata.getCoverLocked())) {
+            log.debug("Cover is locked, skipping thumbnail update");
+            return null;
+        }
+        
+        return thumbnailUrl;
+    }
+
+    private void moveFileIfNeeded(BookEntity bookEntity, BookMetadataEntity metadata, 
+            Long bookId, Path oldPath) {
+        try {
+            FileMoveResult result = fileMoveService.moveSingleFile(bookEntity);
+            if (result.isMoved()) {
+                SystemOperationContext.markSystemOperation(oldPath);
+                
+                bookEntity.setFileName(result.getNewFileName());
+                bookEntity.setFileSubPath(result.getNewFileSubPath());
+                
+                Path newPath = bookEntity.getFullFilePath();
+                SystemOperationContext.markSystemOperation(newPath);
+                
+                log.info("File moved during metadata update for book ID {}: {} -> {}", bookId, oldPath, newPath);
+            }
+        } catch (Exception e) {
+            log.warn("Failed to move file for book ID {} after metadata update: {}", bookId, e.getMessage());
         }
     }
 
