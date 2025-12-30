@@ -317,7 +317,6 @@ public class LibraryFileEventProcessor {
                         boolean sizeChanged = newSize != book.getFileSizeKb();
                         
                         if (hashChanged || mtimeChanged || sizeChanged) {
-                            String oldHash = book.getCurrentHash();
                             book.setCurrentHash(newHash);
                             book.setLastModifiedTime(newMtime);
                             book.setFileSizeKb(newSize);
