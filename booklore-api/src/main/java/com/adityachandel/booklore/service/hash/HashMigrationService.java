@@ -27,6 +27,12 @@ public class HashMigrationService {
     private static final long BATCH_DELAY_MS = 100;
     private static final int MAX_BOOKS_PER_RUN = 500;
     
+    private enum HashProcessResult {
+        SUCCESS,
+        SKIPPED,
+        FAILED
+    }
+    
     private final BookRepository bookRepository;
     private final NotificationService notificationService;
     private final AtomicBoolean migrationInProgress = new AtomicBoolean(false);
@@ -47,10 +53,11 @@ public class HashMigrationService {
                 slice = bookRepository.findAllNonDeleted(PageRequest.of(pageNumber, BATCH_SIZE));
                 
                 for (BookEntity book : slice.getContent()) {
-                    if (processBookHash(book, true)) {
-                        updated.incrementAndGet();
-                    } else {
-                        failed.incrementAndGet();
+                    HashProcessResult result = processBookHash(book, true);
+                    switch (result) {
+                        case SUCCESS -> updated.incrementAndGet();
+                        case FAILED -> failed.incrementAndGet();
+                        case SKIPPED -> {} // Should not happen with forceRegenerate=true
                     }
                     processed.incrementAndGet();
                 }
@@ -84,6 +91,7 @@ public class HashMigrationService {
         
         AtomicInteger processed = new AtomicInteger(0);
         AtomicInteger updated = new AtomicInteger(0);
+        AtomicInteger skipped = new AtomicInteger(0);
         AtomicInteger failed = new AtomicInteger(0);
         
         int pageNumber = 0;
@@ -98,10 +106,11 @@ public class HashMigrationService {
                     break;
                 }
                 
-                if (processBookHash(book, false)) {
-                    updated.incrementAndGet();
-                } else {
-                    failed.incrementAndGet();
+                HashProcessResult result = processBookHash(book, false);
+                switch (result) {
+                    case SUCCESS -> updated.incrementAndGet();
+                    case SKIPPED -> skipped.incrementAndGet();
+                    case FAILED -> failed.incrementAndGet();
                 }
                 processed.incrementAndGet();
             }
@@ -118,7 +127,7 @@ public class HashMigrationService {
         HashMigrationResult result = new HashMigrationResult(
                 processed.get(), updated.get(), failed.get(), duration);
         
-        log.info("[HASH_REGENERATE_MISSING] Completed: {}", result);
+        log.info("[HASH_REGENERATE_MISSING] Completed: {} (skipped {} already-hashed books)", result, skipped.get());
         
         return result;
     }
@@ -161,27 +170,27 @@ public class HashMigrationService {
     }
 
     @Transactional
-    protected boolean processBookHash(BookEntity book, boolean forceRegenerate) {
+    protected HashProcessResult processBookHash(BookEntity book, boolean forceRegenerate) {
         try {
             Path filePath = book.getFullFilePath();
             
             if (!Files.exists(filePath)) {
                 log.debug("Book {} has invalid file path: {}", book.getId(), filePath);
-                return false;
+                return HashProcessResult.FAILED;
             }
             
             String currentHash = book.getCurrentHash();
             boolean needsHash = currentHash == null || currentHash.isEmpty() || forceRegenerate;
             
             if (!needsHash) {
-                return false;
+                return HashProcessResult.SKIPPED;
             }
             
             String newHash = FileFingerprint.generateHash(filePath);
             
             if (newHash == null || newHash.isEmpty()) {
                 log.warn("Failed to generate hash for book {}: {}", book.getId(), filePath);
-                return false;
+                return HashProcessResult.FAILED;
             }
             
             if (book.getInitialHash() == null || book.getInitialHash().isEmpty()) {
@@ -192,11 +201,11 @@ public class HashMigrationService {
             bookRepository.save(book);
             
             log.debug("Updated hash for book {}: {}", book.getId(), newHash);
-            return true;
+            return HashProcessResult.SUCCESS;
             
         } catch (Exception e) {
             log.warn("Error processing hash for book {}: {}", book.getId(), e.getMessage());
-            return false;
+            return HashProcessResult.FAILED;
         }
     }
 
