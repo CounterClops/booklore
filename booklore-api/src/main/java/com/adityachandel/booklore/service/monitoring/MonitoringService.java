@@ -147,6 +147,13 @@ public class MonitoringService {
         Path fullPath = event.getFilePath();
         WatchEvent.Kind<?> kind = event.getEventKind();
 
+        if (kind == StandardWatchEventKinds.ENTRY_MODIFY) {
+            if (isRelevantBookFile(fullPath) && Files.isRegularFile(fullPath)) {
+                queueEvent(event, fullPath, kind);
+            }
+            return;
+        }
+
         if (kind != StandardWatchEventKinds.ENTRY_CREATE && kind != StandardWatchEventKinds.ENTRY_DELETE) return;
 
         boolean isDir = kind == StandardWatchEventKinds.ENTRY_CREATE

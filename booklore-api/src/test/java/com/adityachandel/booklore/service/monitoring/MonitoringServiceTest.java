@@ -285,4 +285,58 @@ class MonitoringServiceTest {
         Map<Path, WatchKey> keys = (Map<Path, WatchKey>) keysField.get(service);
         assertTrue(keys.containsKey(dir));
     }
+
+    @Test
+    void handleFileChangeEvent_modifyBookFile_queuesEvent() throws Exception {
+        Path watched = tmp.resolve("watched-modify");
+        Files.createDirectories(watched);
+        Path file = watched.resolve("book.epub");
+        Files.writeString(file, "content");
+
+        Field pathToLibraryField = MonitoringService.class.getDeclaredField("pathToLibraryIdMap");
+        pathToLibraryField.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        Map<Path,Long> map = (Map<Path,Long>) pathToLibraryField.get(service);
+        map.put(watched, 42L);
+
+        java.lang.reflect.Method startMethod = MonitoringService.class.getDeclaredMethod("startProcessingThread");
+        startMethod.setAccessible(true);
+        startMethod.invoke(service);
+
+        FileChangeEvent ev = mock(FileChangeEvent.class);
+        when(ev.getFilePath()).thenReturn(file);
+        doReturn(StandardWatchEventKinds.ENTRY_MODIFY).when(ev).getEventKind();
+        when(ev.getWatchedFolder()).thenReturn(watched);
+
+        service.handleFileChangeEvent(ev);
+
+        verify(processor, timeout(2_000)).processFile(eq(StandardWatchEventKinds.ENTRY_MODIFY), eq(42L), eq(watched.toString()), eq(file.toString()));
+    }
+
+    @Test
+    void handleFileChangeEvent_modifyNonBookFile_ignoresEvent() throws Exception {
+        Path watched = tmp.resolve("watched-modify-ignore");
+        Files.createDirectories(watched);
+        Path file = watched.resolve("readme.txt");
+        Files.writeString(file, "text");
+
+        Field pathToLibraryField = MonitoringService.class.getDeclaredField("pathToLibraryIdMap");
+        pathToLibraryField.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        Map<Path,Long> map = (Map<Path,Long>) pathToLibraryField.get(service);
+        map.put(watched, 43L);
+
+        java.lang.reflect.Method startMethod = MonitoringService.class.getDeclaredMethod("startProcessingThread");
+        startMethod.setAccessible(true);
+        startMethod.invoke(service);
+
+        FileChangeEvent ev = mock(FileChangeEvent.class);
+        when(ev.getFilePath()).thenReturn(file);
+        doReturn(StandardWatchEventKinds.ENTRY_MODIFY).when(ev).getEventKind();
+        when(ev.getWatchedFolder()).thenReturn(watched);
+
+        service.handleFileChangeEvent(ev);
+
+        verify(processor, timeout(500).times(0)).processFile(any(), anyLong(), anyString(), anyString());
+    }
 }

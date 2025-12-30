@@ -66,6 +66,8 @@ public class LibraryFileEventProcessor {
             handleDeleteEvent(path, eventKind, libraryId, libraryPath, filePath);
         } else if (eventKind == StandardWatchEventKinds.ENTRY_CREATE) {
             handleCreateEvent(path, eventKind, libraryId, libraryPath, filePath);
+        } else if (eventKind == StandardWatchEventKinds.ENTRY_MODIFY) {
+            handleModifyEvent(path, libraryId, libraryPath, filePath);
         } else {
             eventQueue.offer(new FileEvent(eventKind, libraryId, libraryPath, filePath));
         }
@@ -121,6 +123,31 @@ public class LibraryFileEventProcessor {
         }
         
         eventQueue.offer(new FileEvent(eventKind, libraryId, libraryPath, filePath));
+    }
+
+    private void handleModifyEvent(Path path, long libraryId, String libraryPath, String filePath) {
+        String fileName = path.getFileName().toString();
+        if (!isBookFile(fileName)) {
+            return;
+        }
+        
+        schedulePendingModify(path, libraryId, libraryPath, filePath);
+    }
+
+    private final ConcurrentMap<Path, ScheduledFuture<?>> pendingModifies = new ConcurrentHashMap<>();
+
+    private void schedulePendingModify(Path path, long libraryId, String libraryPath, String filePath) {
+        ScheduledFuture<?> existing = pendingModifies.remove(path);
+        if (existing != null) {
+            existing.cancel(false);
+        }
+        
+        ScheduledFuture<?> future = scheduler.schedule(() -> {
+            pendingModifies.remove(path);
+            eventQueue.offer(new FileEvent(StandardWatchEventKinds.ENTRY_MODIFY, libraryId, libraryPath, filePath));
+        }, DEBOUNCE_MS, TimeUnit.MILLISECONDS);
+        
+        pendingModifies.put(path, future);
     }
 
     private void scheduleDelete(Path path, WatchEvent.Kind<?> eventKind, long libraryId, String libraryPath, String filePath, String hash) {
@@ -233,6 +260,7 @@ public class LibraryFileEventProcessor {
         switch (event.eventKind().name()) {
             case "ENTRY_CREATE" -> handleFileCreate(library, path);
             case "ENTRY_DELETE" -> handleFileDelete(library, path);
+            case "ENTRY_MODIFY" -> handleFileModify(library, path);
             default -> log.debug("[SKIP] File event '{}' ignored for '{}'", event.eventKind().name(), fileName);
         }
     }
@@ -263,6 +291,35 @@ public class LibraryFileEventProcessor {
 
         } catch (Exception e) {
             log.warn("[ERROR] While handling file delete '{}': {}", path, e.getMessage());
+        }
+    }
+
+    private void handleFileModify(LibraryEntity library, Path path) {
+        log.info("[FILE_MODIFY] '{}'", path);
+        try {
+            String libPath = bookFilePersistenceService.findMatchingLibraryPath(library, path);
+            LibraryPathEntity libPathEntity = bookFilePersistenceService.getLibraryPathEntityForFile(library, libPath);
+
+            Path relPath = Paths.get(libPathEntity.getPath()).relativize(path);
+            String fileName = relPath.getFileName().toString();
+            String fileSubPath = Optional.ofNullable(relPath.getParent()).map(Path::toString).orElse("");
+
+            bookFilePersistenceService.findByLibraryPathSubPathAndFileName(libPathEntity.getId(), fileSubPath, fileName)
+                    .ifPresentOrElse(book -> {
+                        String newHash = FileFingerprint.generateHash(path);
+                        if (newHash != null && !newHash.equals(book.getCurrentHash())) {
+                            String oldHash = book.getCurrentHash();
+                            book.setCurrentHash(newHash);
+                            bookFilePersistenceService.save(book);
+                            log.info("[HASH_UPDATED] Book '{}' hash updated from '{}' to '{}'", 
+                                    fileName, oldHash, newHash);
+                        } else {
+                            log.debug("[HASH_UNCHANGED] Book '{}' hash unchanged", fileName);
+                        }
+                    }, () -> log.debug("[NOT_FOUND] Book for modified path '{}' not found", path));
+
+        } catch (Exception e) {
+            log.warn("[ERROR] While handling file modify '{}': {}", path, e.getMessage());
         }
     }
 
