@@ -19,6 +19,8 @@ import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.nio.file.*;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -307,19 +309,44 @@ public class LibraryFileEventProcessor {
             bookFilePersistenceService.findByLibraryPathSubPathAndFileName(libPathEntity.getId(), fileSubPath, fileName)
                     .ifPresentOrElse(book -> {
                         String newHash = FileFingerprint.generateHash(path);
-                        if (newHash != null && !newHash.equals(book.getCurrentHash())) {
+                        Instant newMtime = getLastModifiedTime(path);
+                        long newSize = getFileSizeKb(path);
+                        
+                        boolean hashChanged = newHash != null && !newHash.equals(book.getCurrentHash());
+                        boolean mtimeChanged = newMtime != null && !newMtime.equals(book.getLastModifiedTime());
+                        boolean sizeChanged = newSize != book.getFileSizeKb();
+                        
+                        if (hashChanged || mtimeChanged || sizeChanged) {
                             String oldHash = book.getCurrentHash();
                             book.setCurrentHash(newHash);
+                            book.setLastModifiedTime(newMtime);
+                            book.setFileSizeKb(newSize);
                             bookFilePersistenceService.save(book);
-                            log.info("[HASH_UPDATED] Book '{}' hash updated from '{}' to '{}'", 
-                                    fileName, oldHash, newHash);
+                            log.info("[FILE_MODIFIED] Book '{}' updated: hash={}, mtime={}, size={}", 
+                                    fileName, hashChanged, mtimeChanged, sizeChanged);
                         } else {
-                            log.debug("[HASH_UNCHANGED] Book '{}' hash unchanged", fileName);
+                            log.debug("[FILE_UNCHANGED] Book '{}' no changes detected", fileName);
                         }
                     }, () -> log.debug("[NOT_FOUND] Book for modified path '{}' not found", path));
 
         } catch (Exception e) {
             log.warn("[ERROR] While handling file modify '{}': {}", path, e.getMessage());
+        }
+    }
+
+    private Instant getLastModifiedTime(Path path) {
+        try {
+            return Files.getLastModifiedTime(path).toInstant().truncatedTo(ChronoUnit.SECONDS);
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    private long getFileSizeKb(Path path) {
+        try {
+            return Files.size(path) / 1024;
+        } catch (IOException e) {
+            return 0;
         }
     }
 

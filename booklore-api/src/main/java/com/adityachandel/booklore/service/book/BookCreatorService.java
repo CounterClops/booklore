@@ -11,7 +11,10 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 
+import java.io.IOException;
+import java.nio.file.Files;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
 
 @Slf4j
@@ -35,15 +38,18 @@ public class BookCreatorService {
             log.warn("Book already exists for file: {}", libraryFile.getFileName());
             String newHash = FileFingerprint.generateHash(libraryFile.getFullPath());
             long fileSizeKb = FileUtils.getFileSizeInKb(libraryFile.getFullPath());
+            Instant lastModified = getLastModifiedTime(libraryFile);
             BookEntity existingBook = existingBookOpt.get();
             existingBook.setCurrentHash(newHash);
             existingBook.setInitialHash(newHash);
             existingBook.setDeleted(false);
             existingBook.setFileSizeKb(fileSizeKb);
+            existingBook.setLastModifiedTime(lastModified);
             return existingBook;
         }
 
         long fileSizeKb = FileUtils.getFileSizeInKb(libraryFile.getFullPath());
+        Instant lastModified = getLastModifiedTime(libraryFile);
 
         BookEntity bookEntity = BookEntity.builder()
                 .library(libraryFile.getLibraryEntity())
@@ -52,6 +58,7 @@ public class BookCreatorService {
                 .fileSubPath(libraryFile.getFileSubPath())
                 .bookType(bookFileType)
                 .fileSizeKb(fileSizeKb)
+                .lastModifiedTime(lastModified)
                 .addedOn(Instant.now())
                 .build();
 
@@ -98,5 +105,14 @@ public class BookCreatorService {
         }
         bookRepository.save(bookEntity);
         bookMetadataRepository.save(bookEntity.getMetadata());
+    }
+
+    private Instant getLastModifiedTime(LibraryFile libraryFile) {
+        try {
+            return Files.getLastModifiedTime(libraryFile.getFullPath()).toInstant().truncatedTo(ChronoUnit.SECONDS);
+        } catch (IOException e) {
+            log.debug("Could not get last modified time for '{}': {}", libraryFile.getFileName(), e.getMessage());
+            return null;
+        }
     }
 }

@@ -60,6 +60,9 @@ public class BookEntity {
     @Column(name = "current_hash", length = 128)
     private String currentHash;
 
+    @Column(name = "last_modified_time")
+    private Instant lastModifiedTime;
+
     @Column(name = "deleted")
     @Builder.Default
     private Boolean deleted = Boolean.FALSE;

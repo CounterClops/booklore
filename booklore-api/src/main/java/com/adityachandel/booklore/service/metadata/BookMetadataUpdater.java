@@ -29,10 +29,13 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.io.File;
+import java.io.IOException;
 import java.net.InetAddress;
 import java.net.URI;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -161,6 +164,8 @@ public class BookMetadataUpdater {
                 
                 String newHash = FileFingerprint.generateHash(filePath);
                 bookEntity.setCurrentHash(newHash);
+                bookEntity.setLastModifiedTime(Files.getLastModifiedTime(filePath).toInstant().truncatedTo(ChronoUnit.SECONDS));
+                bookEntity.setFileSizeKb(Files.size(filePath) / 1024);
             } catch (Exception e) {
                 log.warn("Failed to write metadata for book ID {}: {}", bookEntity.getId(), e.getMessage());
             }

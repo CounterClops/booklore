@@ -8,6 +8,7 @@ import com.adityachandel.booklore.model.entity.LibraryEntity;
 import com.adityachandel.booklore.model.websocket.LogNotification;
 import com.adityachandel.booklore.model.websocket.Topic;
 import com.adityachandel.booklore.repository.BookAdditionalFileRepository;
+import com.adityachandel.booklore.repository.BookRepository;
 import com.adityachandel.booklore.repository.LibraryRepository;
 import com.adityachandel.booklore.service.NotificationService;
 import com.adityachandel.booklore.service.file.FileFingerprint;
@@ -24,6 +25,8 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -35,6 +38,7 @@ public class LibraryProcessingService {
     private final LibraryRepository libraryRepository;
     private final NotificationService notificationService;
     private final BookAdditionalFileRepository bookAdditionalFileRepository;
+    private final BookRepository bookRepository;
     private final LibraryFileProcessorRegistry fileProcessorRegistry;
     private final BookRestorationService bookRestorationService;
     private final BookDeletionService bookDeletionService;
@@ -76,6 +80,13 @@ public class LibraryProcessingService {
             bookDeletionService.processDeletedLibraryFiles(bookIds, libraryFiles);
         }
         bookRestorationService.restoreDeletedBooks(libraryFiles, libraryEntity);
+        
+        int modifiedCount = updateModifiedFileHashes(libraryFiles, libraryEntity);
+        if (modifiedCount > 0) {
+            log.info("Updated hashes for {} modified files in library: {}", modifiedCount, libraryEntity.getName());
+        }
+        
+        entityManager.flush();
         entityManager.clear();
         processor.processLibraryFiles(detectNewBookPaths(libraryFiles, libraryEntity), libraryEntity);
 
@@ -158,5 +169,96 @@ public class LibraryProcessingService {
                 .filter(additionalFile -> !currentFileNames.contains(additionalFile.getFileName()))
                 .map(BookAdditionalFileEntity::getId)
                 .collect(Collectors.toList());
+    }
+
+    protected int updateModifiedFileHashes(List<LibraryFile> libraryFiles, LibraryEntity libraryEntity) {
+        Map<Path, LibraryFile> filesByPath = libraryFiles.stream()
+                .collect(Collectors.toMap(LibraryFile::getFullPath, f -> f, (a, b) -> a));
+
+        int updatedCount = 0;
+        int initializedCount = 0;
+        
+        for (BookEntity book : libraryEntity.getBookEntities()) {
+            if (book.getDeleted() != null && book.getDeleted()) {
+                continue;
+            }
+            
+            Path bookPath = book.getFullFilePath();
+            LibraryFile libraryFile = filesByPath.get(bookPath);
+            
+            if (libraryFile == null || !Files.exists(bookPath)) {
+                continue;
+            }
+            
+            if (!hasStoredModificationInfo(book)) {
+                initializeModificationInfo(book, bookPath);
+                initializedCount++;
+            } else if (isFileModified(book, bookPath)) {
+                updateBookFileMetadata(book, bookPath);
+                updatedCount++;
+            }
+        }
+        
+        if (initializedCount > 0) {
+            log.info("Initialized modification tracking for {} files in library '{}'", 
+                    initializedCount, libraryEntity.getName());
+        }
+        
+        return updatedCount;
+    }
+
+    private boolean hasStoredModificationInfo(BookEntity book) {
+        return book.getLastModifiedTime() != null && book.getFileSizeKb() != null;
+    }
+
+    private void initializeModificationInfo(BookEntity book, Path filePath) {
+        try {
+            Instant fileMtime = Files.getLastModifiedTime(filePath).toInstant().truncatedTo(ChronoUnit.SECONDS);
+            long fileSizeKb = Files.size(filePath) / 1024;
+            
+            book.setLastModifiedTime(fileMtime);
+            book.setFileSizeKb(fileSizeKb);
+            bookRepository.save(book);
+        } catch (IOException e) {
+            log.debug("Could not initialize modification info for '{}': {}", filePath, e.getMessage());
+        }
+    }
+
+    private boolean isFileModified(BookEntity book, Path filePath) {
+        try {
+            Instant fileMtime = Files.getLastModifiedTime(filePath).toInstant().truncatedTo(ChronoUnit.SECONDS);
+            long fileSizeKb = Files.size(filePath) / 1024;
+            
+            Instant storedMtime = book.getLastModifiedTime();
+            Long storedSize = book.getFileSizeKb();
+            
+            boolean mtimeChanged = !fileMtime.equals(storedMtime);
+            boolean sizeChanged = storedSize == null || fileSizeKb != storedSize;
+            
+            return mtimeChanged || sizeChanged;
+        } catch (IOException e) {
+            log.debug("Could not check modification for '{}': {}", filePath, e.getMessage());
+            return false;
+        }
+    }
+
+    private void updateBookFileMetadata(BookEntity book, Path filePath) {
+        try {
+            Instant fileMtime = Files.getLastModifiedTime(filePath).toInstant().truncatedTo(ChronoUnit.SECONDS);
+            long fileSizeKb = Files.size(filePath) / 1024;
+            String newHash = FileFingerprint.generateHash(filePath);
+            
+            log.debug("Updating modified file '{}': mtime={}, size={}", 
+                    book.getFileName(), fileMtime, fileSizeKb);
+            
+            book.setLastModifiedTime(fileMtime);
+            book.setFileSizeKb(fileSizeKb);
+            if (newHash != null) {
+                book.setCurrentHash(newHash);
+            }
+            bookRepository.save(book);
+        } catch (IOException e) {
+            log.warn("Failed to update modified file metadata for '{}': {}", filePath, e.getMessage());
+        }
     }
 }
