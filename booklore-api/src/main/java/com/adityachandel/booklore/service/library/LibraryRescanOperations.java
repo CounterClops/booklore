@@ -47,7 +47,8 @@ public class LibraryRescanOperations {
             bookAdditionalFileRepository.deleteAllById(additionalFileIds);
         }
 
-        List<Long> bookIds = detectDeletedBookIds(diskFiles, libraryEntity);
+        Map<String, Path> unknownFileHashes = buildUnknownFileHashMap(diskFiles, libraryId);
+        List<Long> bookIds = detectDeletedBookIds(diskFiles, libraryEntity, unknownFileHashes);
         if (!bookIds.isEmpty()) {
             log.info("Detected {} removed books in library: {}", bookIds.size(), libraryEntity.getName());
             bookDeletionService.processDeletedLibraryFiles(bookIds, diskFiles);
@@ -119,6 +120,36 @@ public class LibraryRescanOperations {
         return pathToBookId;
     }
 
+    private Map<String, Path> buildUnknownFileHashMap(List<LibraryFile> diskFiles, long libraryId) {
+        Map<Path, Long> pathToBookId = buildPathToBookIdMap(libraryId);
+        Map<String, Path> unknownFileHashes = new HashMap<>();
+        int hashedCount = 0;
+
+        for (LibraryFile diskFile : diskFiles) {
+            Path filePath = diskFile.getFullPath();
+
+            if (pathToBookId.containsKey(filePath)) {
+                continue;
+            }
+
+            try {
+                String hash = FileFingerprint.generateHash(filePath);
+                if (hash != null && !hash.isEmpty()) {
+                    unknownFileHashes.put(hash, filePath);
+                    hashedCount++;
+                }
+            } catch (Exception e) {
+                log.debug("Could not hash unknown file '{}': {}", filePath, e.getMessage());
+            }
+        }
+
+        if (hashedCount > 0) {
+            log.debug("Hashed {} unknown files for deletion detection in library {}", hashedCount, libraryId);
+        }
+
+        return unknownFileHashes;
+    }
+
     private Path buildFullPath(String libraryPath, String fileSubPath, String fileName) {
         Path basePath = Path.of(libraryPath);
         if (fileSubPath != null && !fileSubPath.isEmpty()) {
@@ -154,16 +185,39 @@ public class LibraryRescanOperations {
         return UpdateResult.NO_CHANGE;
     }
 
-    private List<Long> detectDeletedBookIds(List<LibraryFile> libraryFiles, LibraryEntity libraryEntity) {
+    private List<Long> detectDeletedBookIds(List<LibraryFile> libraryFiles, LibraryEntity libraryEntity, Map<String, Path> unknownFileHashes) {
         Set<Path> currentFullPaths = libraryFiles.stream()
                 .map(LibraryFile::getFullPath)
                 .collect(Collectors.toSet());
 
         return libraryEntity.getBookEntities().stream()
                 .filter(book -> (book.getDeleted() == null || !book.getDeleted()))
-                .filter(book -> !BookLocationUtils.canLocateBookInFiles(book, currentFullPaths))
+                .filter(book -> !canLocateBook(book, currentFullPaths, unknownFileHashes))
                 .map(BookEntity::getId)
                 .collect(Collectors.toList());
+    }
+
+    private boolean canLocateBook(BookEntity book, Set<Path> currentPaths, Map<String, Path> unknownFileHashes) {
+        Path bookPath = book.getFullFilePath();
+        if (bookPath != null && currentPaths.contains(bookPath)) {
+            return true;
+        }
+
+        String currentHash = book.getCurrentHash();
+        if (currentHash != null && !currentHash.isEmpty() && unknownFileHashes.containsKey(currentHash)) {
+            log.debug("Book {} found at new location via currentHash '{}'", book.getId(), currentHash);
+            return true;
+        }
+
+        String initialHash = book.getInitialHash();
+        if (initialHash != null && !initialHash.isEmpty() && !initialHash.equals(currentHash)) {
+            if (unknownFileHashes.containsKey(initialHash)) {
+                log.debug("Book {} found at new location via initialHash '{}'", book.getId(), initialHash);
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private List<Long> detectDeletedAdditionalFiles(List<LibraryFile> libraryFiles, LibraryEntity libraryEntity) {
