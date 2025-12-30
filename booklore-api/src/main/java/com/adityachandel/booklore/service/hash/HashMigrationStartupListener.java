@@ -14,6 +14,8 @@ import java.util.concurrent.Executor;
 @AllArgsConstructor
 public class HashMigrationStartupListener {
 
+    private static final long STARTUP_DELAY_MS = 5000;
+
     private final HashMigrationService hashMigrationService;
     private final Executor taskExecutor;
 
@@ -24,7 +26,7 @@ public class HashMigrationStartupListener {
         
         taskExecutor.execute(() -> {
             try {
-                Thread.sleep(5000);
+                Thread.sleep(STARTUP_DELAY_MS);
                 hashMigrationService.performStartupMigration();
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();

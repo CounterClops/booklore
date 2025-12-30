@@ -12,6 +12,7 @@ import com.adityachandel.booklore.repository.LibraryRepository;
 import com.adityachandel.booklore.service.NotificationService;
 import com.adityachandel.booklore.service.file.FileFingerprint;
 import com.adityachandel.booklore.task.options.RescanLibraryContext;
+import com.adityachandel.booklore.util.BookLocationUtils;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import lombok.AllArgsConstructor;
@@ -93,75 +94,9 @@ public class LibraryProcessingService {
 
         return libraryEntity.getBookEntities().stream()
                 .filter(book -> (book.getDeleted() == null || !book.getDeleted()))
-                .filter(book -> !canLocateBookInFiles(book, currentFullPaths))
+                .filter(book -> !BookLocationUtils.canLocateBookInFiles(book, currentFullPaths))
                 .map(BookEntity::getId)
                 .collect(Collectors.toList());
-    }
-
-    private boolean canLocateBookInFiles(BookEntity book, Set<Path> currentPaths) {
-        if (book == null || currentPaths == null) {
-            log.debug("Cannot locate book - null parameters provided");
-            return false;
-        }
-        
-        Path bookPath = book.getFullFilePath();
-        if (bookPath != null && currentPaths.contains(bookPath)) {
-            return true;
-        }
-        
-        String currentHash = book.getCurrentHash();
-        if (currentHash != null && !currentHash.isEmpty() && 
-            findBookByHashInPaths(currentHash, currentPaths, book.getId())) {
-            return true;
-        }
-        
-        String initialHash = book.getInitialHash();
-        if (initialHash != null && !initialHash.isEmpty() && 
-            !initialHash.equals(currentHash)) {
-            if (findBookByHashInPaths(initialHash, currentPaths, book.getId())) {
-                return true;
-            }
-        }
-        
-        log.debug("Book {} not found - no path or hash match in current files", book.getId());
-        return false;
-    }
-
-    private boolean findBookByHashInPaths(String hash, Set<Path> paths, Long bookId) {
-        if (hash == null || hash.isEmpty() || paths == null) {
-            return false;
-        }
-        
-        boolean exists = paths.stream().anyMatch(path -> verifyFileMatchesHash(path, hash));
-        
-        if (exists) {
-            log.debug("Book {} found at new location via hash '{}'", bookId, hash);
-        }
-        
-        return exists;
-    }
-
-    private boolean verifyFileMatchesHash(Path path, String expectedHash) {
-        if (path == null || expectedHash == null) {
-            return false;
-        }
-        
-        try {
-            if (!Files.exists(path)) {
-                return false;
-            }
-            String fileHash = FileFingerprint.generateHash(path);
-            boolean matches = expectedHash.equals(fileHash);
-            
-            if (!matches) {
-                log.trace("Hash mismatch for '{}': expected '{}', got '{}'", path, expectedHash, fileHash);
-            }
-            
-            return matches;
-        } catch (Exception e) {
-            log.debug("Error checking hash for '{}': {}", path, e.getMessage());
-            return false;
-        }
     }
 
     protected List<LibraryFile> detectNewBookPaths(List<LibraryFile> libraryFiles, LibraryEntity libraryEntity) {

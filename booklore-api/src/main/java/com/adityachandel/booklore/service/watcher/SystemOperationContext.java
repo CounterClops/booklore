@@ -4,28 +4,26 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.nio.file.Path;
 import java.time.Instant;
-import java.util.*;
+import java.util.Collection;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * Tracks system-initiated file operations to prevent file watcher from re-processing them.
- * Prevents duplicate book entries when system modifies files during metadata updates or file moves.
- */
 @Slf4j
 public class SystemOperationContext {
 
     private static final long EXPIRATION_MS = 5000;
-    private static final ThreadLocal<Set<Path>> threadLocalPaths = ThreadLocal.withInitial(HashSet::new);
-    private static final Map<Path, Instant> globalOperations = new ConcurrentHashMap<>();
-    
+    private static final Map<Path, Instant> activeOperations = new ConcurrentHashMap<>();
+    private static final ThreadLocal<Set<Path>> threadMarkedPaths = ThreadLocal.withInitial(ConcurrentHashMap::newKeySet);
+
     public static void markSystemOperation(Path path) {
         if (path == null) {
             return;
         }
         
         Path normalizedPath = path.toAbsolutePath().normalize();
-        threadLocalPaths.get().add(normalizedPath);
-        globalOperations.put(normalizedPath, Instant.now());
+        activeOperations.put(normalizedPath, Instant.now());
+        threadMarkedPaths.get().add(normalizedPath);
         log.debug("Marked system operation: {}", normalizedPath);
     }
     
@@ -43,20 +41,17 @@ public class SystemOperationContext {
         }
         
         Path normalizedPath = path.toAbsolutePath().normalize();
-        
-        if (threadLocalPaths.get().contains(normalizedPath)) {
+        Instant timestamp = activeOperations.get(normalizedPath);
+
+        if (timestamp == null) {
+            return false;
+        }
+
+        if (Instant.now().toEpochMilli() - timestamp.toEpochMilli() < EXPIRATION_MS) {
             return true;
         }
-        
-        Instant timestamp = globalOperations.get(normalizedPath);
-        if (timestamp != null) {
-            if (Instant.now().toEpochMilli() - timestamp.toEpochMilli() < EXPIRATION_MS) {
-                return true;
-            } else {
-                globalOperations.remove(normalizedPath);
-            }
-        }
-        
+
+        activeOperations.remove(normalizedPath);
         return false;
     }
     
@@ -66,30 +61,30 @@ public class SystemOperationContext {
         }
         
         Path normalizedPath = path.toAbsolutePath().normalize();
-        threadLocalPaths.get().remove(normalizedPath);
-        globalOperations.remove(normalizedPath);
+        activeOperations.remove(normalizedPath);
+        threadMarkedPaths.get().remove(normalizedPath);
         log.debug("Unmarked system operation: {}", normalizedPath);
     }
     
     public static void clearThreadContext() {
-        Set<Path> paths = threadLocalPaths.get();
-        paths.forEach(globalOperations::remove);
+        Set<Path> paths = threadMarkedPaths.get();
+        paths.forEach(activeOperations::remove);
         paths.clear();
         log.trace("Cleared thread context");
     }
     
     public static void cleanupExpiredOperations() {
         Instant cutoff = Instant.now().minusMillis(EXPIRATION_MS);
-        globalOperations.entrySet().removeIf(entry -> entry.getValue().isBefore(cutoff));
+        activeOperations.entrySet().removeIf(entry -> entry.getValue().isBefore(cutoff));
     }
     
     public static int getOperationCount() {
         cleanupExpiredOperations();
-        return globalOperations.size();
+        return activeOperations.size();
     }
     
     public static void clearAll() {
-        threadLocalPaths.remove();
-        globalOperations.clear();
+        threadMarkedPaths.remove();
+        activeOperations.clear();
     }
 }
