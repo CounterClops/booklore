@@ -167,14 +167,14 @@ public class LibraryRescanOperations {
     }
 
     private List<Long> detectDeletedAdditionalFiles(List<LibraryFile> libraryFiles, LibraryEntity libraryEntity) {
-        Set<String> currentFileNames = libraryFiles.stream()
-                .map(LibraryFile::getFileName)
+        Set<Path> currentFullPaths = libraryFiles.stream()
+                .map(LibraryFile::getFullPath)
                 .collect(Collectors.toSet());
 
         List<BookAdditionalFileEntity> allAdditionalFiles = bookAdditionalFileRepository.findByLibraryId(libraryEntity.getId());
 
         return allAdditionalFiles.stream()
-                .filter(additionalFile -> !currentFileNames.contains(additionalFile.getFileName()))
+                .filter(additionalFile -> !currentFullPaths.contains(additionalFile.getFullFilePath()))
                 .map(BookAdditionalFileEntity::getId)
                 .collect(Collectors.toList());
     }
