@@ -32,7 +32,11 @@ import java.util.concurrent.*;
 public class LibraryFileEventProcessor {
 
     private static final long DEBOUNCE_MS = 500L;
-    private static final long RENAME_DETECTION_WINDOW_MS = 200L;
+    private static final long FILE_STABILITY_WAIT_MS = 5000L;
+    private static final long FILE_STABILITY_CHECK_INTERVAL_MS = 100L;
+    private static final int HASH_MAX_RETRIES = 5;
+    private static final long HASH_RETRY_TIMEOUT_MS = 30000L;
+    private static final long INITIAL_BACKOFF_MS = 100L;
 
     private final BlockingQueue<FileEvent> eventQueue = new LinkedBlockingQueue<>();
     private final LibraryRepository libraryRepository;
@@ -42,7 +46,6 @@ public class LibraryFileEventProcessor {
 
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
     private final ConcurrentMap<Path, PendingDelete> pendingDeletes = new ConcurrentHashMap<>();
-    private final ConcurrentMap<String, RecentCreate> recentCreates = new ConcurrentHashMap<>();
 
     @PostConstruct
     public void init() {
@@ -84,19 +87,6 @@ public class LibraryFileEventProcessor {
         }
         
         String hash = getBookHashForPath(libraryId, path);
-        
-        if (hash != null && !hash.isEmpty()) {
-            Optional<RecentCreate> matchingCreate = findRecentCreateByHash(hash);
-            if (matchingCreate.isPresent()) {
-                RecentCreate createEvent = matchingCreate.get();
-                recentCreates.remove(createEvent.hash());
-                log.info("[RENAME_DETECTED] File renamed from '{}' to '{}' via hash '{}'", 
-                        path, createEvent.path(), hash);
-                handleFileMove(libraryId, path, createEvent.path(), hash);
-                return;
-            }
-        }
-        
         scheduleDelete(path, eventKind, libraryId, libraryPath, filePath, hash);
     }
 
@@ -106,22 +96,6 @@ public class LibraryFileEventProcessor {
             pendingDelete.future().cancel(false);
             log.debug("[DEBOUNCE] CREATE ignored because pending DELETE exists for same path '{}'", path);
             return;
-        }
-        
-        String hash = calculateHashSafely(path);
-        if (hash != null && !hash.isEmpty() && isBookFile(path.getFileName().toString())) {
-            Optional<Map.Entry<Path, PendingDelete>> matchingDelete = findPendingDeleteByHash(hash);
-            if (matchingDelete.isPresent()) {
-                Path oldPath = matchingDelete.get().getKey();
-                PendingDelete pending = matchingDelete.get().getValue();
-                pendingDeletes.remove(oldPath);
-                pending.future().cancel(false);
-                log.info("[RENAME_DETECTED] File renamed from '{}' to '{}' via hash '{}'", oldPath, path, hash);
-                handleFileMove(libraryId, oldPath, path, hash);
-                return;
-            }
-            
-            storeRecentCreate(path, hash);
         }
         
         eventQueue.offer(new FileEvent(eventKind, libraryId, libraryPath, filePath));
@@ -164,30 +138,64 @@ public class LibraryFileEventProcessor {
         }
     }
 
-    private void storeRecentCreate(Path path, String hash) {
-        RecentCreate recentCreate = new RecentCreate(path, hash, System.currentTimeMillis());
-        recentCreates.put(hash, recentCreate);
-        
-        scheduler.schedule(() -> {
-            RecentCreate stored = recentCreates.get(hash);
-            if (stored != null && stored.timestamp() == recentCreate.timestamp()) {
-                recentCreates.remove(hash);
-            }
-        }, RENAME_DETECTION_WINDOW_MS, TimeUnit.MILLISECONDS);
-    }
-
-    private Optional<RecentCreate> findRecentCreateByHash(String hash) {
-        RecentCreate recent = recentCreates.get(hash);
-        if (recent != null && (System.currentTimeMillis() - recent.timestamp()) <= RENAME_DETECTION_WINDOW_MS) {
-            return Optional.of(recent);
-        }
-        return Optional.empty();
-    }
-
     private Optional<Map.Entry<Path, PendingDelete>> findPendingDeleteByHash(String hash) {
         return pendingDeletes.entrySet().stream()
                 .filter(entry -> hash.equals(entry.getValue().hash()))
                 .findFirst();
+    }
+
+    private boolean waitForFileStability(Path path, long maxWaitMs) {
+        long startTime = System.currentTimeMillis();
+        long lastSize = -1;
+        
+        while (System.currentTimeMillis() - startTime < maxWaitMs) {
+            try {
+                long currentSize = Files.size(path);
+                if (lastSize == currentSize && lastSize > 0) {
+                    return true;
+                }
+                lastSize = currentSize;
+                Thread.sleep(FILE_STABILITY_CHECK_INTERVAL_MS);
+            } catch (IOException | InterruptedException e) {
+                return false;
+            }
+        }
+        return false;
+    }
+
+    private String hashFileWithRetry(Path path, int maxRetries, long maxTotalWaitMs) {
+        long startTime = System.currentTimeMillis();
+        int attempt = 0;
+        
+        while (attempt < maxRetries) {
+            if (System.currentTimeMillis() - startTime > maxTotalWaitMs) {
+                log.warn("Hash retry timeout exceeded for '{}' after {}ms", path, maxTotalWaitMs);
+                return null;
+            }
+            
+            try {
+                return FileFingerprint.generateHash(path);
+            } catch (Exception e) {
+                attempt++;
+                if (attempt >= maxRetries) {
+                    log.warn("Failed to hash file '{}' after {} attempts: {}", 
+                             path, maxRetries, e.getMessage());
+                    return null;
+                }
+                
+                long backoffMs = INITIAL_BACKOFF_MS * (1L << (attempt - 1));
+                log.debug("Hash attempt {} failed for '{}', retrying in {}ms: {}", 
+                          attempt, path, backoffMs, e.getMessage());
+                
+                try {
+                    Thread.sleep(backoffMs);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    return null;
+                }
+            }
+        }
+        return null;
     }
 
     private String getBookHashForPath(long libraryId, Path path) {
@@ -214,13 +222,21 @@ public class LibraryFileEventProcessor {
 
     private String calculateHashSafely(Path path) {
         try {
-            if (Files.exists(path)) {
-                return FileFingerprint.generateHash(path);
+            if (!Files.exists(path)) {
+                return null;
             }
+            
+            if (!waitForFileStability(path, FILE_STABILITY_WAIT_MS)) {
+                log.debug("File '{}' did not stabilize within {}ms, attempting hash anyway", 
+                         path, FILE_STABILITY_WAIT_MS);
+            }
+            
+            return hashFileWithRetry(path, HASH_MAX_RETRIES, HASH_RETRY_TIMEOUT_MS);
+            
         } catch (Exception e) {
             log.debug("Could not calculate hash for path '{}': {}", path, e.getMessage());
+            return null;
         }
-        return null;
     }
 
     private void handleFileMove(long libraryId, Path oldPath, Path newPath, String hash) {
@@ -269,6 +285,24 @@ public class LibraryFileEventProcessor {
 
     private void handleFileCreate(LibraryEntity library, Path path) {
         log.info("[FILE_CREATE] '{}'", path);
+        
+        String hash = calculateHashSafely(path);
+        
+        if (hash != null && !hash.isEmpty()) {
+            Optional<Map.Entry<Path, PendingDelete>> matchingDelete = findPendingDeleteByHash(hash);
+            if (matchingDelete.isPresent()) {
+                Path oldPath = matchingDelete.get().getKey();
+                PendingDelete pending = matchingDelete.get().getValue();
+                pendingDeletes.remove(oldPath);
+                pending.future().cancel(false);
+                
+                log.info("[RENAME_DETECTED] File renamed from '{}' to '{}' via hash '{}'", 
+                         oldPath, path, hash);
+                bookFileTransactionalHandler.handleFileMove(library.getId(), oldPath, path, hash);
+                return;
+            }
+        }
+        
         bookFileTransactionalHandler.handleNewBookFile(library.getId(), path);
     }
 
@@ -398,8 +432,5 @@ public class LibraryFileEventProcessor {
     }
 
     private record PendingDelete(ScheduledFuture<?> future, String hash) {
-    }
-
-    private record RecentCreate(Path path, String hash, long timestamp) {
     }
 }
