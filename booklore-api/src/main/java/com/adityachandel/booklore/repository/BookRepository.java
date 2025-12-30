@@ -157,4 +157,26 @@ public interface BookRepository extends JpaRepository<BookEntity, Long>, JpaSpec
 
     @Query("SELECT COUNT(b) FROM BookEntity b WHERE b.deleted = true")
     long countSoftDeletedBooks();
+
+    @Query("""
+        SELECT b FROM BookEntity b 
+        WHERE b.library.id = :libraryId 
+        AND b.libraryPath.id = :libraryPathId 
+        AND b.fileSubPath = :fileSubPath 
+        AND b.fileName = :fileName 
+        AND (b.deleted IS NULL OR b.deleted = false)
+    """)
+    Optional<BookEntity> findByLibraryAndPath(
+            @Param("libraryId") Long libraryId,
+            @Param("libraryPathId") Long libraryPathId,
+            @Param("fileSubPath") String fileSubPath,
+            @Param("fileName") String fileName);
+
+    @Query("""
+        SELECT b.id, b.libraryPath.path, b.fileSubPath, b.fileName
+        FROM BookEntity b 
+        WHERE b.library.id = :libraryId 
+        AND (b.deleted IS NULL OR b.deleted = false)
+    """)
+    List<Object[]> findBookPathComponentsByLibraryId(@Param("libraryId") Long libraryId);
 }
