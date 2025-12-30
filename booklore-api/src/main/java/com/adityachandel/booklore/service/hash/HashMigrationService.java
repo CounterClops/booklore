@@ -9,13 +9,11 @@ import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Slice;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -32,63 +30,6 @@ public class HashMigrationService {
     private final BookRepository bookRepository;
     private final NotificationService notificationService;
     private final AtomicBoolean migrationInProgress = new AtomicBoolean(false);
-    private final AtomicBoolean startupMigrationCompleted = new AtomicBoolean(false);
-
-    @Scheduled(fixedDelay = 1, timeUnit = TimeUnit.HOURS)
-    public void scheduledHashMigration() {
-        if (!startupMigrationCompleted.get()) {
-            log.debug("Skipping scheduled migration - startup migration not yet completed");
-            return;
-        }
-
-        tryExecuteMigrationWithLock(() -> {
-            log.info("[SCHEDULED_HASH_MIGRATION] Starting background hash regeneration");
-            HashMigrationResult result = regenerateMissingHashesInternal(MAX_BOOKS_PER_RUN);
-            
-            if (result.processed() > 0) {
-                log.info("[SCHEDULED_HASH_MIGRATION] Completed: processed={}, updated={}, failed={}", 
-                        result.processed(), result.updated(), result.failed());
-            }
-            return null;
-        }, "Skipping scheduled migration - another migration already in progress");
-    }
-
-    public void performStartupMigration() {
-        if (startupMigrationCompleted.get()) {
-            log.info("[STARTUP_MIGRATION] Already completed, skipping");
-            return;
-        }
-
-        tryExecuteMigrationWithLock(() -> {
-            try {
-                log.info("[STARTUP_MIGRATION] Starting hash migration for books with missing hashes");
-                
-                long totalMissing = bookRepository.countBooksWithMissingHashes();
-                if (totalMissing == 0) {
-                    log.info("[STARTUP_MIGRATION] No books with missing hashes found");
-                    startupMigrationCompleted.set(true);
-                    return null;
-                }
-
-                log.info("[STARTUP_MIGRATION] Found {} books with missing hashes", totalMissing);
-                
-                HashMigrationResult result = regenerateMissingHashesInternal(null);
-                
-                log.info("[STARTUP_MIGRATION] Completed: processed={}, updated={}, failed={}, duration={}ms", 
-                        result.processed(), result.updated(), result.failed(), result.durationMs());
-                
-                startupMigrationCompleted.set(true);
-                
-                sendNotification(result, "Startup hash migration completed");
-                return null;
-                
-            } catch (Exception e) {
-                log.error("[STARTUP_MIGRATION] Failed: {}", e.getMessage(), e);
-                startupMigrationCompleted.set(true);
-                return null;
-            }
-        }, "Skipping startup migration - another migration already in progress");
-    }
 
     public HashMigrationResult regenerateAllHashes() {
         return executeMigrationWithLock(() -> {
@@ -215,8 +156,7 @@ public class HashMigrationService {
                 total - missing,
                 missing,
                 softDeleted,
-                migrationInProgress.get(),
-                startupMigrationCompleted.get()
+                migrationInProgress.get()
         );
     }
 
@@ -291,7 +231,6 @@ public class HashMigrationService {
             long booksWithHashes,
             long booksMissingHashes,
             long booksSoftDeleted,
-            boolean migrationInProgress,
-            boolean startupMigrationCompleted
+            boolean migrationInProgress
     ) {}
 }

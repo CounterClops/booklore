@@ -67,6 +67,22 @@ public enum TaskType {
             true,
             "Refresh Metadata",
             "Updates metadata information for your selected books."
+    ),
+    REGENERATE_MISSING_HASHES(
+            false,
+            false,
+            true,
+            false,
+            "Regenerate Missing Hashes",
+            "Generates file hashes for book files that have mising hashes in the database."
+    ),
+    REGENERATE_ALL_HASHES(
+            false,
+            false,
+            false,
+            false,
+            "Regenerate All Hashes",
+            "Regenerates file hashes for all books. Use if hash data is massively out of sync."
     );
 
     @Getter

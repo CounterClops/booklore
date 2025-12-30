@@ -12,7 +12,9 @@ export enum TaskType {
   CLEANUP_DELETED_BOOKS = 'CLEANUP_DELETED_BOOKS',
   SYNC_LIBRARY_FILES = 'SYNC_LIBRARY_FILES',
   CLEANUP_TEMP_METADATA = 'CLEANUP_TEMP_METADATA',
-  REFRESH_METADATA_MANUAL = 'REFRESH_METADATA_MANUAL'
+  REFRESH_METADATA_MANUAL = 'REFRESH_METADATA_MANUAL',
+  REGENERATE_MISSING_HASHES = 'REGENERATE_MISSING_HASHES',
+  REGENERATE_ALL_HASHES = 'REGENERATE_ALL_HASHES'
 }
 
 export const TASK_TYPE_CONFIG: Record<TaskType, { parallel: boolean; async: boolean; displayOrder: number }> = {
@@ -24,6 +26,8 @@ export const TASK_TYPE_CONFIG: Record<TaskType, { parallel: boolean; async: bool
   [TaskType.REFRESH_METADATA_MANUAL]: {parallel: false, async: false, displayOrder: 6},
   [TaskType.CLEAR_CBX_CACHE]: {parallel: false, async: false, displayOrder: 7},
   [TaskType.CLEAR_PDF_CACHE]: {parallel: false, async: false, displayOrder: 8},
+  [TaskType.REGENERATE_MISSING_HASHES]: {parallel: false, async: false, displayOrder: 9},
+  [TaskType.REGENERATE_ALL_HASHES]: {parallel: false, async: false, displayOrder: 10},
 };
 
 export enum MetadataReplaceMode {
